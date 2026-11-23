@@ -269,6 +269,7 @@ if _G.AutoRandomFruit == nil then _G.AutoRandomFruit = false end
 if _G.AutoStoreFruits == nil then _G.AutoStoreFruits = false end
 if _G.HuntFightEvents == nil then _G.HuntFightEvents = false end
 if _G.SoloSeaFarm == nil then _G.SoloSeaFarm = false end
+local qeManualUnequip = { weapon = false, gun = false }
 if _G.RespawnRebuy == nil then _G.RespawnRebuy = false end
 if _G.CruiseReturn == nil then _G.CruiseReturn = true end
 if _G.HuntSelectEvents == nil then _G.HuntSelectEvents = {} end
@@ -1055,6 +1056,15 @@ RunService.Heartbeat:Connect(function(dt)
     if not goal then
         return
     end
+    if _G.SoloSeaFarm and HRP then
+        local v = HRP.AssemblyLinearVelocity
+        if math.abs(v.Y) > 8 or v.Magnitude > 55 then
+            _G.QE_ManualMoveUntil = os.clock() + 1
+        end
+    end
+    if (_G.QE_ManualMoveUntil or 0) > os.clock() then
+        return
+    end
     if not LiveHoldFn then
         HoldCFrame = goal
     end
@@ -1234,6 +1244,13 @@ local function CheckSkill(Weapon, Key)
 end
 local function Equip_Auto(Tool)
     if _G.QE_NoAutoEquip then return end
+    local blockKey = nil
+    if Tool == "Dragonstorm" then
+        blockKey = "gun"
+    elseif Tool == "Melee" or Tool == "Sword" or Tool == "Gun" or Tool == "Blox Fruit" then
+        blockKey = "weapon"
+    end
+    if blockKey and qeManualUnequip[blockKey] then return end
     if not Character or not HRP or not HD then
         return
     end
@@ -7021,6 +7038,7 @@ end
 
 local qeChosenWeapon = nil
 local qeLastWeaponEquip = 0
+local qeLastWeaponTool = nil
 
 local function qeEquipWeapon()
     local char, _, hum = qeParts()
@@ -7037,9 +7055,29 @@ local function qeEquipWeapon()
         order = { "Sword", "Melee", "Blox Fruit" }
     end
     local equipped = char:FindFirstChildOfClass("Tool")
+    if qeManualUnequip.weapon then
+        if equipped then
+            for _, tooltip in ipairs(order) do
+                if equipped.ToolTip == tooltip then
+                    qeManualUnequip.weapon = false
+                    qeLastWeaponTool = equipped.Name
+                    break
+                end
+            end
+        end
+        return true
+    end
+    if qeLastWeaponTool and (not equipped or equipped.Name ~= qeLastWeaponTool) then
+        qeManualUnequip.weapon = true
+        qeLastWeaponTool = nil
+        return true
+    end
     if equipped then
         for _, tooltip in ipairs(order) do
-            if equipped.ToolTip == tooltip then return true end
+            if equipped.ToolTip == tooltip then
+                qeLastWeaponTool = equipped.Name
+                return true
+            end
         end
         if qeChosenWeapon and equipped == qeChosenWeapon then return true end
     end
@@ -7058,22 +7096,42 @@ local function qeEquipWeapon()
     if os.clock() - qeLastWeaponEquip < 1.5 and equipped then return true end
     qeLastWeaponEquip = os.clock()
     qeChosenWeapon = found
+    qeLastWeaponTool = found.Name
     if equipped ~= found then pcall(function() hum:EquipTool(found) end) end
     return true
 end
 
 local qeLastGunCraft = 0
 local qeLastGunEquip = 0
+local qeLastGunTool = nil
 
 local function qeEquipDragonstorm()
     local char, _, hum = qeParts()
     if not char or not hum then return false end
     local equipped = char:FindFirstChildOfClass("Tool")
-    if _G.QE_NoAutoEquip then
-        if equipped and (equipped.ToolTip == "Gun" or equipped.Name == "Dragonstorm") then return true end
+    local isGun = function(tool)
+        return tool and (tool.ToolTip == "Gun" or tool.Name == "Dragonstorm")
+    end
+    if qeManualUnequip.gun then
+        if isGun(equipped) then
+            qeManualUnequip.gun = false
+            qeLastGunTool = equipped.Name
+        end
         return false
     end
-    if equipped and (equipped.ToolTip == "Gun" or equipped.Name == "Dragonstorm") then return true end
+    if qeLastGunTool and (not equipped or equipped.Name ~= qeLastGunTool) then
+        qeManualUnequip.gun = true
+        qeLastGunTool = nil
+        return false
+    end
+    if _G.QE_NoAutoEquip then
+        if isGun(equipped) then return true end
+        return false
+    end
+    if isGun(equipped) then
+        qeLastGunTool = equipped.Name
+        return true
+    end
     local gun = nil
     if qeLocal.Backpack then
         for _, tool in ipairs(qeLocal.Backpack:GetChildren()) do
@@ -7092,6 +7150,7 @@ local function qeEquipDragonstorm()
     end
     if os.clock() - qeLastGunEquip < 2 and equipped then return false end
     qeLastGunEquip = os.clock()
+    qeLastGunTool = gun.Name
     pcall(function() hum:EquipTool(gun) end)
     return false
 end
@@ -7422,19 +7481,37 @@ QETab:AddSection("Quantum Attack")
 QETab:AddToggle("qe.fast", {
     Title = "Fast Attack / Kill Aura",
     Default = _G.QE_FastAttack,
-    Callback = function(state) _G.QE_FastAttack = state end,
+    Callback = function(state)
+        _G.QE_FastAttack = state
+        if state then
+            qeManualUnequip.weapon = false
+            qeLastWeaponTool = nil
+            qeChosenWeapon = nil
+        end
+    end,
 })
 QETab:AddDropdown("qe.weapon", {
     Title = "Weapon",
     Values = { "All", "Sword", "Melee", "Fruit" },
     Default = _G.QE_Weapon,
     Multi = false,
-    Callback = function(value) _G.QE_Weapon = value end,
+    Callback = function(value)
+        _G.QE_Weapon = value
+        qeManualUnequip.weapon = false
+        qeLastWeaponTool = nil
+        qeChosenWeapon = nil
+    end,
 })
 QETab:AddToggle("qe.gun", {
     Title = "Auto Shoot Gun (Dragonstorm)",
     Default = _G.QE_AutoGun,
-    Callback = function(state) _G.QE_AutoGun = state end,
+    Callback = function(state)
+        _G.QE_AutoGun = state
+        if state then
+            qeManualUnequip.gun = false
+            qeLastGunTool = nil
+        end
+    end,
 })
 QETab:AddToggle("qe.aimnpc", {
     Title = "Aim / Kill Aura: NPC + Sea Events",
