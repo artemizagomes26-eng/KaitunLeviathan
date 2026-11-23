@@ -7257,7 +7257,7 @@ local qeWeaponChar = nil
 local function qeEquipWeapon()
     local char, _, hum = qeParts()
     if not char or not hum then return false end
-    if not qeWhitelistedEventReady() then return false end
+    if not qeWhitelistedEventReady() then return true end
     if qeWeaponChar ~= char then
         qeWeaponChar = char
         qeManualUnequip.weapon = false
@@ -7330,7 +7330,7 @@ local qeGunChar = nil
 local function qeEquipDragonstorm()
     local char, _, hum = qeParts()
     if not char or not hum then return false end
-    if not qeWhitelistedEventReady() then return false end
+    if not qeWhitelistedEventReady() then return true end
     if qeGunChar ~= char then
         qeGunChar = char
         qeManualUnequip.gun = false
@@ -7535,22 +7535,11 @@ local function qeHuntReady()
 end
 
 local function qeBribeStatus()
-    local remotes = RS:FindFirstChild("Remotes")
-    local comm = (remotes and remotes:FindFirstChild("CommF_")) or qeCommF
-    if not comm then return nil end
-    local ok, result = pcall(function() return comm:InvokeServer("InfoLeviathan", "1") end)
-    if not ok then return nil end
-    if comm ~= qeCommF then qeCommF = comm end
-    return tonumber(result)
+    return GetBribeStatus()
 end
 
 local function qePaySpy()
-    local remotes = RS:FindFirstChild("Remotes")
-    local comm = (remotes and remotes:FindFirstChild("CommF_")) or qeCommF
-    if not comm then return false end
-    local ok = pcall(function() comm:InvokeServer("InfoLeviathan", "2") end)
-    if ok and comm ~= qeCommF then qeCommF = comm end
-    return ok
+    return DoBribe()
 end
 
 local function qeLeviathanSpawned()
@@ -7696,7 +7685,7 @@ local function qeBananaEnsureBoat()
     end
     task.wait(0.6)
     if qeCommF then
-        SetStatus("Banana: comprando Beast Hunter")
+        SetStatus("Banana: buying Beast Hunter")
         pcall(function() qeCommF:InvokeServer("BuyBoat", "Beast Hunter") end)
     end
     local started = os.clock()
@@ -7777,36 +7766,21 @@ local function qeBananaFind()
     local seat = boat:FindFirstChild("VehicleSeat")
     if not seat then return end
     if not qeBananaBoardSeat(seat) then
-        SetStatus("Banana: tentando embarcar no Beast Hunter")
+        SetStatus("Banana: boarding Beast Hunter")
         return
     end
-    if seat.Position.Y < 150 then qeBananaSetAltitude(seat, 160) end
+    if seat.Position.Y < 150 or seat.Position.Y > 190 then
+        qeBananaSetAltitude(seat, 160)
+    end
     local danger = qeBananaDangerCount()
-    if danger > 0 and seat.Position.Y > 170 then
-        qeBananaCancelTween()
-        qeBananaSetAltitude(seat, 160)
-        qeBananaCounting = true
-        task.wait(0.5)
-    elseif seat.Position.Y < 150 then
-        qeBananaSetAltitude(seat, 160)
-        qeBananaCounting = false
-    end
-    if qeBananaSeaEventNear() and seat.Position.Y < 500 then
-        qeBananaCancelTween()
-        qeBananaSetAltitude(seat, 500)
-        task.wait(0.5)
-    elseif not qeBananaSeaEventNear() and seat.Position.Y > 300 then
-        qeBananaCancelTween()
-        qeBananaSetAltitude(seat, 160)
-        task.wait(0.5)
-    end
-    local high = seat.Position.Y >= 400
-    local patrolA = CFrame.new(qeBananaPatrolA.Position.X, high and 500 or 160, qeBananaPatrolA.Position.Z)
-        * qeBananaPatrolA.Rotation
-    local patrolB = CFrame.new(qeBananaPatrolB.Position.X, high and 500 or 160, qeBananaPatrolB.Position.Z)
-        * qeBananaPatrolB.Rotation
-    local target = (math.floor(os.clock() / 60) % 2 == 0) and patrolA or patrolB
-    SetStatus("Banana: " .. (qeBananaCounting and "contando mares" or "patrulhando") .. " para encontrar o Leviathan")
+    qeBananaCounting = danger > 0
+    local waypoint = (math.floor(os.clock() / 60) % 2 == 0) and qeBananaPatrolA or qeBananaPatrolB
+    local nextWaypoint = (math.floor(os.clock() / 60) % 2 == 0) and qeBananaPatrolB or qeBananaPatrolA
+    local target = CFrame.lookAt(
+        Vector3.new(waypoint.Position.X, 160, waypoint.Position.Z),
+        Vector3.new(nextWaypoint.Position.X, 160, nextWaypoint.Position.Z)
+    )
+    SetStatus("Banana: " .. (qeBananaCounting and "counting sea danger" or "patrolling") .. " to find Leviathan")
     qeBananaTweenSeat(seat, target)
 end
 
@@ -7891,7 +7865,7 @@ task.spawn(function()
             if _G.QE_BananaAutoBuySpy then
                 local status = qeBribeStatus()
                 if status ~= -1 and status ~= 5 then
-                    qePaySpy()
+                    BribeUntilDone()
                 end
             end
             if _G.QE_BananaAutoFind then qeBananaFind() end
@@ -8160,7 +8134,7 @@ BananaSection:AddButton({
 end)
 BananaSection:AddButton({
     Title = "Pay Spy (Quantum)",
-    Description = "Invoca InfoLeviathan 2 pelo CommF_ do Quantum.",
+    Description = "Calls InfoLeviathan 2 through Quantum's CommF_.",
 }, function()
     qePaySpy()
 end)
@@ -8232,7 +8206,7 @@ BananaSection:AddDropdown("banana.owner", {
 })
 BananaSection:AddSlider("banana.speed", {
     Title = "Boat Speed (Banana)",
-    Description = "Velocidade do tween do barco no ar (30-250).",
+    Description = "Boat tween speed in the air (30-250).",
     Default = _G.QE_BananaBoatSpeed,
     Min = 30,
     Max = 250,
@@ -8306,7 +8280,7 @@ QETab:AddToggle("qe.noequip", {
 })
 QETab:AddToggle("qe.destroy", {
     Title = "Auto Destroy Idk",
-    Description = "Após o Leviathan completo: recompra o barco, farma a whitelist de Sea Events até acabar o cooldown, reseta, espera a whitelist de players, paga o Spy e repete o ciclo.",
+    Description = "After Leviathan: rebuy boat, farm whitelisted Sea Events until cooldown ends, reset, wait for whitelisted players, pay Spy, repeat.",
     Default = _G.QE_AutoDestroyIdk,
     Callback = function(state)
         _G.QE_AutoDestroyIdk = state
@@ -8318,7 +8292,7 @@ QETab:AddToggle("qe.destroy", {
 })
 QETab:AddToggle("qe.destroysolo", {
     Title = "Auto Destroy Idk (solo)",
-    Description = "Igual ao Auto Destroy, mas faz os Sea Events sozinho e não espera a whitelist de players.",
+    Description = "Same as Auto Destroy, but farms Sea Events solo and skips waiting for whitelisted players.",
     Default = _G.QE_AutoDestroySolo,
     Callback = function(state)
         _G.QE_AutoDestroySolo = state
@@ -8333,7 +8307,7 @@ QETab:AddToggle("qe.destroysolo", {
 })
 QETab:AddToggle("qe.noeventequip", {
     Title = "No Whitelist Event = No Equip",
-    Description = "Só pega arma na mão quando aparece um Sea Event da whitelist e você está fora do barco.",
+    Description = "Only equips a weapon when a whitelisted Sea Event appears and you are off the boat.",
     Default = _G.QE_BananaNoEventNoEquip,
     Callback = function(state) _G.QE_BananaNoEventNoEquip = state end,
 })
@@ -8432,14 +8406,14 @@ QETab:AddSlider("qe.boatspeed", {
     Callback = function(value) _G.BoatSpeed = math.clamp(value, 50, 400) end,
 })
 QETab:AddToggle("qe.dashenabled", {
-    Title = "Dash (tecla Q)",
-    Description = "Ativa um dash curto com a tecla Q.",
+    Title = "Dash (Q key)",
+    Description = "Enables a short dash with the Q key.",
     Default = _G.QE_DashEnabled,
     Callback = function(state) _G.QE_DashEnabled = state end,
 })
 QETab:AddSlider("qe.dashspeed", {
     Title = "Dash Speed (50-500)",
-    Description = "Força do dash, passo de 5.",
+    Description = "Dash strength, step of 5.",
     Default = _G.QE_DashSpeed,
     Min = 50,
     Max = 500,
