@@ -102,8 +102,8 @@ T, ModeDisplay = (function()
         ["fps.boost.desc"] = { en = "Cut water waves, shadows, particles and map materials; also applies to islands streamed in later. Rejoin to restore", es = "Recorta olas, sombras, particulas y materiales del mapa; tambien se aplica a las islas que se cargan despues. Reingresa para restaurar", zh = "削减海浪、阴影、粒子和地图材质，之后新加载的岛屿也会自动套用；关闭后需重进恢复" },
         ["hunt.events"] = { en = "Fight Sea Events While Hunting", es = "Atacar eventos mientras busca", zh = "寻找利维坦时攻击海上事件" },
         ["hunt.events.desc"] = { en = "Fight sea events during hunt", es = "Ataca eventos marinos mientras busca al Leviathan", zh = "寻找利维坦途中打海上事件" },
-        ["hunt.select.events"] = { en = "Select Sea Events To Fight", es = "Eventos que debe atacar", zh = "选择攻击的海上事件" },
-        ["hunt.select.events.desc"] = { en = "Only fight selected events, skip others (empty = all)", es = "Solo ataca los eventos marcados; el resto los ignora (vacio = todos)", zh = "只攻击选择的事件，未选择的不攻击继续开船（不选=全部）" },
+        ["hunt.select.events"] = { en = "Sea Events Whitelist", es = "Whitelist de eventos marinos", zh = "海上事件白名单" },
+        ["hunt.select.events.desc"] = { en = "Only fight whitelisted events, skip others (empty = all)", es = "Solo ataca los eventos de la whitelist; el resto los ignora (vacio = todos)", zh = "只攻击白名单中的事件（空=全部）" },
         ["info.ui"] = { en = "Info Display UI", es = "Panel de información", zh = "信息显示 UI" },
         ["info.ui.desc"] = { en = "Show live info overlay at top", es = "Muestra un panel con información en vivo en pantalla", zh = "开启后屏幕顶部生成实时信息浮层" },
         ["language"] = { en = "Language", es = "Idioma", zh = "语言" },
@@ -606,6 +606,9 @@ local ConfigKeys = {
     "QE_FollowTargets",
     "QE_HuntEvents",
     "QE_AutoDestroyIdk",
+    "QE_AutoDestroySolo",
+    "QE_DashSpeed",
+    "QE_DashEnabled",
     "QE_BananaAutoFind",
     "QE_BananaAutoStart",
     "QE_BananaAutoHeart",
@@ -1364,16 +1367,7 @@ local function QE_ForceEquipDragon(hasTarget)
     if not hasTarget then return false end
     if not Character or not HD or HD.Health <= 0 then return false end
     local held = Character:FindFirstChildOfClass("Tool")
-    if held and (held.ToolTip == "Gun" or held.Name == "Dragonstorm") then return true end
-    local backpack = LocalPlayer:FindFirstChild("Backpack")
-    if not backpack then return false end
-    for _, tool in pairs(backpack:GetChildren()) do
-        if tool:IsA("Tool") and (tool.ToolTip == "Gun" or tool.Name == "Dragonstorm") then
-            pcall(function() HD:EquipTool(tool) end)
-            return true
-        end
-    end
-    return false
+    return held ~= nil and (held.ToolTip == "Gun" or held.Name == "Dragonstorm")
 end
 local function Skill_Auto(Key)
     local Code
@@ -4352,7 +4346,8 @@ local function StartCaptain()
     end
     CaptainRunning = true
     task.spawn(function()
-        while _G.AutoLeviathanFull and _G.Mode == "Capitán" and not _G.QE_AutoDestroyIdk do
+        while _G.AutoLeviathanFull and _G.Mode == "Capitán"
+            and not _G.QE_AutoDestroyIdk and not _G.QE_AutoDestroySolo do
             StatusPrefix = ""
             local ok, err = pcall(function()
                 local Map = workspace:FindFirstChild("Map")
@@ -4960,10 +4955,12 @@ end
 HandleAbility("V3")
 HandleAbility("V4")
 RunService.Heartbeat:Connect(function()
-    if _G.AutoLeviathanFull and HRP then
-        if not IsOnBoat() then
-            HRP.AssemblyLinearVelocity = Vector3.zero
+    if _G.AutoLeviathanFull and HRP and not IsOnBoat() then
+        local velocity = HRP.AssemblyLinearVelocity
+        if math.abs(velocity.Y) > 8 or velocity.Magnitude > 55 then
+            return
         end
+        HRP.AssemblyLinearVelocity = Vector3.zero
     end
 end)
 local function DoRemoveFog()
@@ -6988,6 +6985,9 @@ if _G.QE_WaitSeats == nil then _G.QE_WaitSeats = true end
 if _G.QE_NoAutoEquip == nil then _G.QE_NoAutoEquip = false end
 if _G.QE_AllowFastAutoEquip == nil then _G.QE_AllowFastAutoEquip = false end
 if _G.QE_AutoDestroyIdk == nil then _G.QE_AutoDestroyIdk = false end
+if _G.QE_AutoDestroySolo == nil then _G.QE_AutoDestroySolo = false end
+if _G.QE_DashSpeed == nil then _G.QE_DashSpeed = 180 end
+if _G.QE_DashEnabled == nil then _G.QE_DashEnabled = true end
 if _G.QE_BananaAutoFind == nil then _G.QE_BananaAutoFind = false end
 if _G.QE_BananaAutoStart == nil then _G.QE_BananaAutoStart = false end
 if _G.QE_BananaAutoHeart == nil then _G.QE_BananaAutoHeart = false end
@@ -6995,7 +6995,8 @@ if _G.QE_BananaReturnTiki == nil then _G.QE_BananaReturnTiki = false end
 if _G.QE_BananaReturnHydra == nil then _G.QE_BananaReturnHydra = false end
 if _G.QE_BananaAutoBuySpy == nil then _G.QE_BananaAutoBuySpy = false end
 if _G.QE_BananaUseOwnBoat == nil then _G.QE_BananaUseOwnBoat = true end
-if _G.QE_BananaBoatSpeed == nil then _G.QE_BananaBoatSpeed = 350 end
+if _G.QE_BananaBoatSpeed == nil then _G.QE_BananaBoatSpeed = 140 end
+_G.QE_BananaBoatSpeed = math.clamp(tonumber(_G.QE_BananaBoatSpeed) or 140, 30, 250)
 if _G.QE_BananaOwner == nil then _G.QE_BananaOwner = "" end
 if _G.QE_FollowTargets == nil then
     _G.QE_FollowTargets = {}
@@ -7055,6 +7056,63 @@ local function qeFace(position)
     end)
 end
 
+local qeFacingReleaseUntil = 0
+
+local function qeReleaseFacing()
+    local _, hrp, hum = qeParts()
+    if not hrp or not hum then return end
+    local camera = workspace.CurrentCamera
+    if not camera then return end
+    local look = camera.CFrame.LookVector
+    local flat = Vector3.new(look.X, 0, look.Z)
+    if flat.Magnitude < 0.01 then return end
+    qeFacingReleaseUntil = os.clock() + 1.5
+    pcall(function()
+        hum.AutoRotate = true
+        hrp.CFrame = CFrame.lookAt(hrp.Position, hrp.Position + flat)
+    end)
+end
+
+task.spawn(function()
+    while true do
+        task.wait(0.1)
+        if qeFacingReleaseUntil > os.clock() then
+            local _, hrp, hum = qeParts()
+            local camera = workspace.CurrentCamera
+            if hrp and hum and camera and not _G.QE_FastAttack and not _G.QE_AutoGun then
+                local look = camera.CFrame.LookVector
+                local flat = Vector3.new(look.X, 0, look.Z)
+                if flat.Magnitude > 0.01 then
+                    pcall(function() hrp.CFrame = CFrame.lookAt(hrp.Position, hrp.Position + flat) end)
+                end
+            end
+        end
+    end
+end)
+
+local qeLastDashAt = 0
+pcall(function()
+    game:GetService("UserInputService").InputBegan:Connect(function(input, processed)
+        if processed or input.KeyCode ~= Enum.KeyCode.Q then return end
+        if not _G.QE_DashEnabled then return end
+        if os.clock() - qeLastDashAt < 2.5 then return end
+        local _, hrp, hum = qeParts()
+        local camera = workspace.CurrentCamera
+        if not hrp or not hum or not camera or hum.Sit or hum.Health <= 0 then return end
+        local look = camera.CFrame.LookVector
+        local flat = Vector3.new(look.X, 0, look.Z)
+        if flat.Magnitude < 0.01 then return end
+        qeLastDashAt = os.clock()
+        pcall(function()
+            hrp.AssemblyLinearVelocity = flat.Unit * tonumber(_G.QE_DashSpeed or 180)
+            hum.AutoRotate = true
+        end)
+        task.delay(0.18, function()
+            pcall(function() hrp.AssemblyLinearVelocity = Vector3.new(flat.X * 8, 0, flat.Z * 8) end)
+        end)
+    end)
+end)
+
 local qeAimTarget = nil
 
 local function qeEventAllowed(modelName)
@@ -7073,17 +7131,26 @@ local function qeFilteredSeaMob(maxDistance)
     local _, hrp = qeParts()
     if not hrp then return nil, nil end
     local best, bestDist = nil, nil
-    for _, folderName in ipairs({ "Enemies", "SeaBeasts", "Mobs" }) do
+    for _, folderName in ipairs({ "Enemies", "SeaBeasts", "Mobs", "Boats" }) do
         local folder = workspace:FindFirstChild(folderName)
         if folder then
             for _, model in ipairs(folder:GetChildren()) do
                 if model:IsA("Model") and qeEventAllowed(model.Name) then
-                    local root = model:FindFirstChild("HumanoidRootPart")
-                        or model:FindFirstChild("Head") or model.PrimaryPart
-                    if root and root.Parent then
-                        local dist = (root.Position - hrp.Position).Magnitude
-                        if dist <= maxDistance and (not bestDist or dist < bestDist) then
-                            best, bestDist = model, dist
+                    local skipOwn = false
+                    local ownerValue = model:FindFirstChild("Owner")
+                    if ownerValue then
+                        local value = ownerValue.Value
+                        local name = typeof(value) == "Instance" and value.Name or tostring(value)
+                        skipOwn = value == qeLocal or value == qeLocal.Character or name == qeLocal.Name
+                    end
+                    if not skipOwn then
+                        local root = model:FindFirstChild("HumanoidRootPart")
+                            or model:FindFirstChild("Head") or model.PrimaryPart
+                        if root and root.Parent then
+                            local dist = (root.Position - hrp.Position).Magnitude
+                            if dist <= maxDistance and (not bestDist or dist < bestDist) then
+                                best, bestDist = model, dist
+                            end
                         end
                     end
                 end
@@ -7098,7 +7165,7 @@ local function qeCollectTargets(origin, range, includePlayers)
     local list, seen = {}, {}
     local function add(model, kind)
         if not model or seen[model] or model == qeLocal.Character or not qeAlive(model) then return end
-        if kind == "SeaEvent" and not qeEventAllowed(model.Name) then return end
+        if (kind == "SeaEvent" or kind == "SeaBeast" or kind == "Boat") and not qeEventAllowed(model.Name) then return end
         local owner = model:FindFirstChild("Owner")
         if owner and owner.Value then
             local value = owner.Value
@@ -7507,6 +7574,7 @@ local qeBananaHydraRoute = {
 
 local function qeBananaGetBoat()
     local owner = _G.QE_BananaUseOwnBoat and qeLocal.Name or _G.QE_BananaOwner
+    if not owner or owner == "" then owner = qeLocal.Name end
     local boats = workspace:FindFirstChild("Boats")
     if not boats then return nil end
     for _, boat in ipairs(boats:GetChildren()) do
@@ -7525,7 +7593,8 @@ end
 local function qeBananaTweenSeat(seat, target, speed)
     if not seat or not target then return false end
     local distance = (target.Position - seat.Position).Magnitude
-    local duration = math.max(distance / math.max(tonumber(_G.QE_BananaBoatSpeed) or speed or 350, 50), 0.1)
+    local configured = tonumber(_G.QE_BananaBoatSpeed) or tonumber(speed) or 140
+    local duration = math.max(distance / math.max(configured, 30), 1.5)
     local ok = pcall(function()
         local tween = TweenService:Create(seat, TweenInfo.new(duration, Enum.EasingStyle.Quad), { CFrame = target })
         tween:Play()
@@ -7540,28 +7609,67 @@ local function qeBananaFrozenDimension()
     return locations and locations:FindFirstChild("Frozen Dimension")
 end
 
+local qeBananaBuying = false
+
+local function qeBananaEnsureBoat()
+    local boat = qeBananaGetBoat()
+    if boat then return boat end
+    if qeBananaBuying then return nil end
+    qeBananaBuying = true
+    pcall(Unseat)
+    local _, hrp = qeParts()
+    if hrp and (qeBananaBoatDealer.Position - hrp.Position).Magnitude > 12 then
+        _tp(qeBananaBoatDealer)
+    end
+    task.wait(0.6)
+    if qeCommF then
+        SetStatus("Banana: comprando Beast Hunter")
+        pcall(function() qeCommF:InvokeServer("BuyBoat", "Beast Hunter") end)
+    end
+    local started = os.clock()
+    while os.clock() - started < 15 and (_G.QE_BananaAutoFind or _G.QE_BananaReturnTiki or _G.QE_BananaReturnHydra) do
+        boat = qeBananaGetBoat()
+        if boat then break end
+        task.wait(0.5)
+    end
+    qeBananaBuying = false
+    return boat
+end
+
+local function qeBananaBoardSeat(seat)
+    if not seat or not seat.Parent then return false end
+    if IsSittingOn(seat) then return true end
+    pcall(Unseat)
+    for _ = 1, 6 do
+        if not seat.Parent then return false end
+        local char, hrp, hum = qeParts()
+        if hrp then
+            pcall(function()
+                hrp.CFrame = seat.CFrame + Vector3.new(0, 2.5, 0)
+                hrp.AssemblyLinearVelocity = Vector3.zero
+            end)
+        end
+        task.wait(0.2)
+        if hum then pcall(function() hum.Sit = true end) end
+        task.wait(0.15)
+        if IsSittingOn(seat) then return true end
+    end
+    return false
+end
+
 local function qeBananaFind()
     if qeBananaFrozenDimension() then return end
-    local boat = qeBananaGetBoat()
-    if not boat then
-        local _, hrp = qeParts()
-        if hrp and (qeBananaBoatDealer.Position - hrp.Position).Magnitude > 8 then
-            _tp(qeBananaBoatDealer)
-        elseif qeCommF then
-            pcall(function() qeCommF:InvokeServer("BuyBoat", "Beast Hunter") end)
-            task.wait(3)
-        end
-        return
-    end
+    local boat = qeBananaEnsureBoat()
+    if not boat then return end
     local seat = boat:FindFirstChild("VehicleSeat")
     if not seat then return end
-    if not IsSittingOn(seat) then
-        BoardSeatRetry(seat)
+    if not qeBananaBoardSeat(seat) then
+        SetStatus("Banana: tentando embarcar no Beast Hunter")
         return
     end
     local target = (math.floor(os.clock() / 60) % 2 == 0) and qeBananaPatrolA or qeBananaPatrolB
     SetStatus("Banana: patrulhando para encontrar o Leviathan")
-    qeBananaTweenSeat(seat, target, 350)
+    qeBananaTweenSeat(seat, target)
 end
 
 local function qeBananaStart()
@@ -7620,7 +7728,7 @@ local function qeBananaShootHeart()
         end
     else
         local harpoonSeat = harpoon:FindFirstChild("Seat")
-        if harpoonSeat then BoardSeatRetry(harpoonSeat) end
+        if harpoonSeat then qeBananaBoardSeat(harpoonSeat) end
     end
 end
 
@@ -7629,7 +7737,7 @@ local function qeBananaDriveRoute(route)
     if not boat then return false end
     local seat = boat:FindFirstChild("VehicleSeat")
     if not seat then return false end
-    if not IsSittingOn(seat) then BoardSeatRetry(seat) end
+    if not qeBananaBoardSeat(seat) then return false end
     for index, point in ipairs(route) do
         if not _G.QE_BananaReturnTiki and not _G.QE_BananaReturnHydra then return false end
         SetStatus("Banana: navegando para " .. (index == #route and "destino final" or "waypoint " .. index))
@@ -7676,7 +7784,7 @@ local qeDestroyResetDone = false
 task.spawn(function()
     while true do
         task.wait(1)
-        if not _G.QE_AutoDestroyIdk or not _G.AutoLeviathanFull then
+        if not (_G.QE_AutoDestroyIdk or _G.QE_AutoDestroySolo) or not _G.AutoLeviathanFull then
             qeDestroyPhase = "idle"
         else
             pcall(function()
@@ -7748,8 +7856,8 @@ task.spawn(function()
                         task.wait(0.5)
                     end
                 end
-                if not _G.SoloSeaFarm and not qeAllSelectedSeated() then
-                    SetStatus("Auto Destroy: waiting selected players to board")
+                if not _G.QE_AutoDestroySolo and not _G.SoloSeaFarm and not qeAllSelectedSeated() then
+                    SetStatus("Auto Destroy: waiting whitelist players to board")
                     return
                 end
                 if status ~= 5 then
@@ -7783,7 +7891,15 @@ task.spawn(function()
                 else
                     qeAimTarget = nil
                 end
-                if _G.QE_Weapon == "Fruit" then
+                if target and target.kind == "Boat" and qeRegisterAttack and qeRegisterHit then
+                    pcall(Unseat)
+                    pcall(function() qeRegisterAttack:FireServer(0.25) end)
+                    local parts = {}
+                    for _, hit in ipairs(hits) do parts[#parts + 1] = { hit.model, hit.part } end
+                    pcall(function()
+                        qeRegisterHit:FireServer(target.part, parts, nil, nil, tostring(qeLocal.UserId) .. os.clock())
+                    end)
+                elseif _G.QE_Weapon == "Fruit" then
                     if target then
                         if qeRegisterAttack then
                             pcall(function() qeRegisterAttack:FireServer(0.25) end)
@@ -7864,7 +7980,7 @@ task.spawn(function()
                     end
                     if #hits == 0 then
                         for _, h in ipairs(qeCollectTargets(hrp.Position, 900, false)) do
-                            table.insert(hits, h)
+                            if h.kind ~= "Boat" then table.insert(hits, h) end
                         end
                     end
                 end
@@ -7911,7 +8027,11 @@ BananaSection:AddToggle("banana.find", {
     Title = "Auto Find Leviathan (Banana)",
     Description = "Buys a Beast Hunter and patrols the Banana Cat routes until Frozen Dimension spawns.",
     Default = _G.QE_BananaAutoFind,
-    Callback = function(state) _G.QE_BananaAutoFind = state; SaveConfig() end,
+    Callback = function(state)
+        _G.QE_BananaAutoFind = state
+        if not state then qeReleaseFacing() end
+        SaveConfig()
+    end,
 })
 BananaSection:AddToggle("banana.start", {
     Title = "Auto Start Leviathan (Banana)",
@@ -7966,11 +8086,12 @@ BananaSection:AddDropdown("banana.owner", {
 })
 BananaSection:AddSlider("banana.speed", {
     Title = "Boat Speed (Banana)",
+    Description = "Velocidade do tween do barco no ar (30-250).",
     Default = _G.QE_BananaBoatSpeed,
-    Min = 50,
-    Max = 500,
-    Rounding = 0,
-    Callback = function(value) _G.QE_BananaBoatSpeed = value; SaveConfig() end,
+    Min = 30,
+    Max = 250,
+    Rounding = 5,
+    Callback = function(value) _G.QE_BananaBoatSpeed = math.clamp(value, 30, 250); SaveConfig() end,
 })
 
 task.spawn(function()
@@ -8039,10 +8160,26 @@ QETab:AddToggle("qe.noequip", {
 })
 QETab:AddToggle("qe.destroy", {
     Title = "Auto Destroy Idk",
-    Description = "After a full Leviathan: rebuy the boat, farm the filtered Sea Events until the cooldown ends, reset, wait for the selected players, pay the spy automatically and repeat the whole Leviathan.",
+    Description = "Após o Leviathan completo: recompra o barco, farma a whitelist de Sea Events até acabar o cooldown, reseta, espera a whitelist de players, paga o Spy e repete o ciclo.",
     Default = _G.QE_AutoDestroyIdk,
     Callback = function(state)
         _G.QE_AutoDestroyIdk = state
+        if state then _G.QE_AutoDestroySolo = false end
+        qeDestroyPhase = "idle"
+        qeDestroyResetDone = false
+        SaveConfig()
+    end,
+})
+QETab:AddToggle("qe.destroysolo", {
+    Title = "Auto Destroy Idk (solo)",
+    Description = "Igual ao Auto Destroy, mas faz os Sea Events sozinho e não espera a whitelist de players.",
+    Default = _G.QE_AutoDestroySolo,
+    Callback = function(state)
+        _G.QE_AutoDestroySolo = state
+        if state then
+            _G.QE_AutoDestroyIdk = false
+            _G.SoloSeaFarm = true
+        end
         qeDestroyPhase = "idle"
         qeDestroyResetDone = false
         SaveConfig()
@@ -8056,7 +8193,7 @@ end
 table.sort(qePlayerValues)
 if #qePlayerValues == 0 then qePlayerValues[1] = "--" end
 local qePlayerDropdown = QETab:AddDropdown("qe.players", {
-    Title = "Hunt With Players (multi)",
+    Title = "Players Whitelist (multi)",
     Values = qePlayerValues,
     Default = qeSelectedNames(_G.QE_FollowTargets),
     Multi = true,
@@ -8067,7 +8204,7 @@ local qePlayerDropdown = QETab:AddDropdown("qe.players", {
     end,
 })
 QETab:AddButton({
-    Title = "Refresh Player List",
+    Title = "Refresh Whitelist",
     Callback = function()
         local values = {}
         for _, player in ipairs(qePlayers:GetPlayers()) do
@@ -8083,7 +8220,7 @@ local qeEventValues = {
     "Ghost Ship", "Pirate Brigade Ship", "Pirate Grand Brigade Ship", "Pirate Basic Ship",
 }
 QETab:AddDropdown("qe.events", {
-    Title = "Allowed Sea Events (multi)",
+    Title = "Sea Events Whitelist (multi)",
     Values = qeEventValues,
     Default = qeSelectedNames(_G.QE_HuntEvents),
     Multi = true,
@@ -8096,10 +8233,13 @@ QETab:AddDropdown("qe.events", {
 QETab:AddToggle("qe.find", {
     Title = "Find Leviathan (auto off on spawn)",
     Default = _G.QE_FindLeviathan,
-    Callback = function(state) _G.QE_FindLeviathan = state end,
+    Callback = function(state)
+        _G.QE_FindLeviathan = state
+        if not state then qeReleaseFacing() end
+    end,
 })
 QETab:AddToggle("qe.waitseats", {
-    Title = "Fully: wait selected players seated",
+    Title = "Fully: wait whitelist players seated",
     Default = _G.QE_WaitSeats,
     Callback = function(state) _G.QE_WaitSeats = state end,
 })
@@ -8111,30 +8251,48 @@ QETab:AddToggle("qe.water", {
         qeSetWalkOnWater(state)
     end,
 })
-QETab:AddSection("Speed Modifiers")
+QETab:AddSection("Modifiers")
 QETab:AddSlider("qe.walkspeed", {
-    Title = "Walk Speed (max 300)",
+    Title = "Walk Speed (50-300)",
+    Description = "Ajuste fino, passo de 1.",
     Default = _G.QE_WalkSpeed,
     Min = 50,
     Max = 300,
-    Rounding = 0,
+    Rounding = 1,
     Callback = function(value) _G.QE_WalkSpeed = math.clamp(value, 50, 300) end,
 })
 QETab:AddSlider("qe.jumppower", {
-    Title = "Jump Height (max 120)",
+    Title = "Jump Power (50-120)",
+    Description = "Ajuste fino, passo de 1.",
     Default = _G.QE_JumpPower,
     Min = 50,
     Max = 120,
-    Rounding = 0,
+    Rounding = 1,
     Callback = function(value) _G.QE_JumpPower = math.clamp(value, 50, 120) end,
 })
 QETab:AddSlider("qe.boatspeed", {
-    Title = "Boat Speed (max 400)",
+    Title = "Boat Speed (50-400)",
+    Description = "Ajuste fino, passo de 1.",
     Default = _G.BoatSpeed,
     Min = 50,
     Max = 400,
-    Rounding = 0,
+    Rounding = 1,
     Callback = function(value) _G.BoatSpeed = math.clamp(value, 50, 400) end,
+})
+QETab:AddToggle("qe.dashenabled", {
+    Title = "Dash (tecla Q)",
+    Description = "Ativa um dash curto com a tecla Q.",
+    Default = _G.QE_DashEnabled,
+    Callback = function(state) _G.QE_DashEnabled = state end,
+})
+QETab:AddSlider("qe.dashspeed", {
+    Title = "Dash Speed (50-500)",
+    Description = "Força do dash, passo de 5.",
+    Default = _G.QE_DashSpeed,
+    Min = 50,
+    Max = 500,
+    Rounding = 5,
+    Callback = function(value) _G.QE_DashSpeed = math.clamp(value, 50, 500) end,
 })
 if _G.QE_WalkOnWater then qeSetWalkOnWater(true) end
 end)()
