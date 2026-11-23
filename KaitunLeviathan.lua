@@ -6848,6 +6848,8 @@ local function qeRefreshRemotes()
     end
     qeRegisterHit = qeRegisterHit or (qeNet and qeNet:FindFirstChild("RE/RegisterHit"))
     qeShootGun = (qeNet and qeNet:FindFirstChild("RE/ShootGunEvent")) or qeShootGun
+        or (qeRemotes and qeRemotes:FindFirstChild("RE/ShootGunEvent"))
+        or (qeRemotes and qeRemotes:FindFirstChild("ShootGunEvent"))
 end
 qeRefreshRemotes()
 
@@ -6859,6 +6861,19 @@ if _G.QE_AimPlayer == nil then _G.QE_AimPlayer = false end
 if _G.QE_SilentAim == nil then _G.QE_SilentAim = true end
 if _G.QE_WalkSpeed == nil then _G.QE_WalkSpeed = 50 end
 if _G.QE_JumpPower == nil then _G.QE_JumpPower = 50 end
+if _G.QE_WalkOnWater == nil then _G.QE_WalkOnWater = false end
+if _G.QE_FindLeviathan == nil then _G.QE_FindLeviathan = false end
+if _G.QE_WaitSeats == nil then _G.QE_WaitSeats = true end
+if _G.QE_FollowTargets == nil then
+    _G.QE_FollowTargets = {}
+    if _G.FollowTarget and _G.FollowTarget ~= "" and _G.FollowTarget ~= "--" then
+        _G.QE_FollowTargets[1] = _G.FollowTarget
+    end
+end
+if _G.QE_HuntEvents == nil then
+    _G.QE_HuntEvents = {}
+    for _, name in ipairs(_G.HuntSelectEvents or {}) do _G.QE_HuntEvents[#_G.QE_HuntEvents + 1] = name end
+end
 _G.QE_WalkSpeed = math.clamp(tonumber(_G.QE_WalkSpeed) or 50, 50, 300)
 _G.QE_JumpPower = math.clamp(tonumber(_G.QE_JumpPower) or 50, 50, 120)
 _G.BoatSpeed = math.clamp(tonumber(_G.BoatSpeed) or 250, 50, 400)
@@ -6909,10 +6924,23 @@ end
 
 local qeAimTarget = nil
 
+local function qeEventAllowed(modelName)
+    local selected = nil
+    if type(_G.QE_HuntEvents) == "table" and #_G.QE_HuntEvents > 0 then selected = _G.QE_HuntEvents end
+    if not selected and type(_G.HuntSelectEvents) == "table" and #_G.HuntSelectEvents > 0 then selected = _G.HuntSelectEvents end
+    if not selected then return true end
+    local clean = string.gsub(string.lower(modelName), "%s+", "")
+    for _, name in ipairs(selected) do
+        if string.gsub(string.lower(tostring(name)), "%s+", "") == clean then return true end
+    end
+    return false
+end
+
 local function qeCollectTargets(origin, range, includePlayers)
     local list, seen = {}, {}
     local function add(model, kind)
         if not model or seen[model] or model == qeLocal.Character or not qeAlive(model) then return end
+        if kind == "SeaEvent" and not qeEventAllowed(model.Name) then return end
         local owner = model:FindFirstChild("Owner")
         if owner and owner.Value then
             local value = owner.Value
@@ -6981,7 +7009,7 @@ local function qePlayerTarget()
     return nil
 end
 
-local qeWeaponCursor = 0
+local qeChosenWeapon = nil
 
 local function qeEquipWeapon()
     local char, _, hum = qeParts()
@@ -6997,35 +7025,52 @@ local function qeEquipWeapon()
         order = { "Sword", "Melee", "Blox Fruit" }
     end
     local equipped = char:FindFirstChildOfClass("Tool")
-    for _, tooltip in ipairs(order) do
-        if equipped and equipped.ToolTip == tooltip then return true end
+    if equipped then
+        for _, tooltip in ipairs(order) do
+            if equipped.ToolTip == tooltip then return true end
+        end
+        if qeChosenWeapon and equipped == qeChosenWeapon then return true end
     end
-    local pool = {}
+    if qeChosenWeapon and qeChosenWeapon.Parent == char then return true end
+    local found = nil
     if qeLocal.Backpack then
         for _, tooltip in ipairs(order) do
             for _, tool in ipairs(qeLocal.Backpack:GetChildren()) do
-                if tool:IsA("Tool") and tool.ToolTip == tooltip then pool[#pool + 1] = tool end
+                if tool:IsA("Tool") and tool.ToolTip == tooltip then found = tool break end
             end
+            if found then break end
         end
     end
-    if #pool == 0 then return equipped ~= nil end
-    qeWeaponCursor = (qeWeaponCursor % #pool) + 1
-    local tool = pool[qeWeaponCursor]
-    if equipped ~= tool then pcall(function() hum:EquipTool(tool) end) end
+    if not found then return equipped ~= nil end
+    qeChosenWeapon = found
+    if equipped ~= found then pcall(function() hum:EquipTool(found) end) end
     return true
 end
+
+local qeLastGunCraft = 0
 
 local function qeEquipDragonstorm()
     local char, _, hum = qeParts()
     if not char or not hum then return false end
-    local tool = char:FindFirstChildOfClass("Tool")
-    if tool and tool.Name == "Dragonstorm" then return true end
-    local dragon = qeLocal.Backpack and qeLocal.Backpack:FindFirstChild("Dragonstorm")
-    if not dragon then
-        if qeCommF then pcall(function() qeCommF:InvokeServer("CraftPrehistoricItem", "Dragonstorm") end) end
+    local equipped = char:FindFirstChildOfClass("Tool")
+    if equipped and (equipped.ToolTip == "Gun" or equipped.Name == "Dragonstorm") then return true end
+    local gun = nil
+    if qeLocal.Backpack then
+        for _, tool in ipairs(qeLocal.Backpack:GetChildren()) do
+            if tool:IsA("Tool") and (tool.ToolTip == "Gun" or tool.Name == "Dragonstorm") then
+                gun = tool
+                break
+            end
+        end
+    end
+    if not gun then
+        if qeCommF and os.clock() - qeLastGunCraft > 10 then
+            qeLastGunCraft = os.clock()
+            pcall(function() qeCommF:InvokeServer("CraftPrehistoricItem", "Dragonstorm") end)
+        end
         return false
     end
-    pcall(function() hum:EquipTool(dragon) end)
+    pcall(function() hum:EquipTool(gun) end)
     return false
 end
 
@@ -7118,6 +7163,96 @@ local function qeApplyStats()
     end
 end
 
+local qeWaterThread = nil
+
+local function qeWaterPlane()
+    local map = workspace:FindFirstChild("Map")
+    if not map then return nil end
+    return map:FindFirstChild("WaterBase-Plane") or map:FindFirstChild("WaterBasePlane")
+end
+
+local function qeSetWalkOnWater(enabled)
+    if qeWaterThread then
+        pcall(function() task.cancel(qeWaterThread) end)
+        qeWaterThread = nil
+    end
+    if enabled then
+        qeWaterThread = task.spawn(function()
+            while _G.QE_WalkOnWater do
+                local plane = qeWaterPlane()
+                if plane then pcall(function() plane.Size = Vector3.new(1000, 113, 1000) end) end
+                task.wait(0.5)
+            end
+            local plane = qeWaterPlane()
+            if plane then pcall(function() plane.Size = Vector3.new(1000, 80, 1000) end) end
+        end)
+    else
+        local plane = qeWaterPlane()
+        if plane then pcall(function() plane.Size = Vector3.new(1000, 80, 1000) end) end
+    end
+end
+
+local function qeSelectedNames(source)
+    local names = {}
+    if type(source) == "table" then
+        for _, name in ipairs(source) do
+            if type(name) == "string" and name ~= "" and name ~= "--" then names[#names + 1] = name end
+        end
+    elseif type(source) == "string" and source ~= "" and source ~= "--" then
+        names[1] = source
+    end
+    return names
+end
+
+local function qeAllSelectedSeated()
+    local names = qeSelectedNames(_G.QE_FollowTargets)
+    if #names == 0 then return true end
+    for _, name in ipairs(names) do
+        local player = qePlayers:FindFirstChild(name)
+        local char = player and player.Character
+        local hum = char and char:FindFirstChildOfClass("Humanoid")
+        if not hum or not hum.SeatPart then return false end
+    end
+    return true
+end
+
+local function qeHuntReady()
+    if _G.AutoLeviathanFull and _G.QE_WaitSeats then
+        return qeAllSelectedSeated()
+    end
+    return true
+end
+
+local function qeBribeStatus()
+    if not qeCommF then return nil end
+    local ok, result = pcall(function() return qeCommF:InvokeServer("InfoLeviathan", "1") end)
+    if not ok then return nil end
+    return tonumber(result)
+end
+
+local function qePaySpy()
+    if not qeCommF then return end
+    pcall(function() qeCommF:InvokeServer("InfoLeviathan", "2") end)
+end
+
+local function qeLeviathanSpawned()
+    if SeaAPI and type(SeaAPI.Leviathan_SegmentsExist) == "function" then
+        local ok, result = pcall(SeaAPI.Leviathan_SegmentsExist)
+        if ok and result then return true end
+    end
+    local map = workspace:FindFirstChild("Map")
+    if map and (map:FindFirstChild("LeviathanGate") or map:FindFirstChild("Leviathan")) then return true end
+    for _, folderName in ipairs({ "Enemies", "SeaBeasts" }) do
+        local folder = workspace:FindFirstChild(folderName)
+        if folder then
+            for _, model in ipairs(folder:GetChildren()) do
+                if string.find(string.lower(model.Name), "leviathan") then return true end
+            end
+        end
+    end
+    return false
+end
+
 task.spawn(function()
     while true do
         task.wait(0.2)
@@ -7127,8 +7262,23 @@ end)
 
 task.spawn(function()
     while true do
+        task.wait(0.5)
+        if _G.QE_FindLeviathan then
+            local status = qeBribeStatus()
+            if status and status ~= 5 and status ~= -1 then qePaySpy() end
+            if qeLeviathanSpawned() then
+                _G.QE_FindLeviathan = false
+                _G.AutoLeviathanFull = true
+                if SendNotify then pcall(SendNotify, "Quantum Extension", "Leviathan spawned - find disabled") end
+            end
+        end
+    end
+end)
+
+task.spawn(function()
+    while true do
         task.wait(0.12)
-        if _G.QE_FastAttack then
+        if _G.QE_FastAttack and qeHuntReady() then
             qeRefreshRemotes()
             local _, hrp, hum = qeParts()
             if hrp and hum and hum.Health > 0 and qeEquipWeapon() then
@@ -7158,7 +7308,7 @@ end)
 task.spawn(function()
     while true do
         task.wait(0.2)
-        if _G.QE_AutoGun then
+        if _G.QE_AutoGun and qeHuntReady() then
             qeRefreshRemotes()
             local _, hrp, hum = qeParts()
             if hrp and hum and hum.Health > 0 and qeEquipDragonstorm() then
@@ -7218,6 +7368,69 @@ QETab:AddToggle("qe.silent", {
     Default = _G.QE_SilentAim,
     Callback = function(state) _G.QE_SilentAim = state end,
 })
+QETab:AddSection("Hunt Team")
+local qePlayerValues = {}
+for _, player in ipairs(qePlayers:GetPlayers()) do
+    if player ~= qeLocal then qePlayerValues[#qePlayerValues + 1] = player.Name end
+end
+table.sort(qePlayerValues)
+if #qePlayerValues == 0 then qePlayerValues[1] = "--" end
+local qePlayerDropdown = QETab:AddDropdown("qe.players", {
+    Title = "Hunt With Players (multi)",
+    Values = qePlayerValues,
+    Default = qeSelectedNames(_G.QE_FollowTargets),
+    Multi = true,
+    Callback = function(values)
+        local names = qeSelectedNames(values)
+        _G.QE_FollowTargets = names
+        _G.FollowTarget = names[1] or ""
+    end,
+})
+QETab:AddButton({
+    Title = "Refresh Player List",
+    Callback = function()
+        local values = {}
+        for _, player in ipairs(qePlayers:GetPlayers()) do
+            if player ~= qeLocal then values[#values + 1] = player.Name end
+        end
+        table.sort(values)
+        if #values == 0 then values[1] = "--" end
+        pcall(function() qePlayerDropdown:SetValues(values) end)
+    end,
+})
+local qeEventValues = {
+    "Shark", "Piranha", "Fish Crew Member", "Terrorshark", "Sea Beast",
+    "Ghost Ship", "Pirate Brigade Ship", "Pirate Grand Brigade Ship", "Pirate Basic Ship",
+}
+QETab:AddDropdown("qe.events", {
+    Title = "Allowed Sea Events (multi)",
+    Values = qeEventValues,
+    Default = qeSelectedNames(_G.QE_HuntEvents),
+    Multi = true,
+    Callback = function(values)
+        local names = qeSelectedNames(values)
+        _G.QE_HuntEvents = names
+        _G.HuntSelectEvents = names
+    end,
+})
+QETab:AddToggle("qe.find", {
+    Title = "Find Leviathan (auto off on spawn)",
+    Default = _G.QE_FindLeviathan,
+    Callback = function(state) _G.QE_FindLeviathan = state end,
+})
+QETab:AddToggle("qe.waitseats", {
+    Title = "Fully: wait selected players seated",
+    Default = _G.QE_WaitSeats,
+    Callback = function(state) _G.QE_WaitSeats = state end,
+})
+QETab:AddToggle("qe.water", {
+    Title = "Walk on Water (Quantum)",
+    Default = _G.QE_WalkOnWater,
+    Callback = function(state)
+        _G.QE_WalkOnWater = state
+        qeSetWalkOnWater(state)
+    end,
+})
 QETab:AddSection("Speed Modifiers")
 QETab:AddSlider("qe.walkspeed", {
     Title = "Walk Speed (max 300)",
@@ -7243,4 +7456,5 @@ QETab:AddSlider("qe.boatspeed", {
     Rounding = 0,
     Callback = function(value) _G.BoatSpeed = math.clamp(value, 50, 400) end,
 })
+if _G.QE_WalkOnWater then qeSetWalkOnWater(true) end
 end)()
