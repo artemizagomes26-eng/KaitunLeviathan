@@ -605,6 +605,7 @@ local ConfigKeys = {
     "QE_WaitSeats",
     "QE_FollowTargets",
     "QE_HuntEvents",
+    "QE_AutoDestroyIdk",
 }
 local function EnsureConfigFolder()
     if typeof(isfolder) == "function" and typeof(makefolder) == "function" then
@@ -4342,7 +4343,7 @@ local function StartCaptain()
     end
     CaptainRunning = true
     task.spawn(function()
-        while _G.AutoLeviathanFull and _G.Mode == "Capitán" do
+        while _G.AutoLeviathanFull and _G.Mode == "Capitán" and not _G.QE_AutoDestroyIdk do
             StatusPrefix = ""
             local ok, err = pcall(function()
                 local Map = workspace:FindFirstChild("Map")
@@ -6977,6 +6978,7 @@ if _G.QE_FindLeviathan == nil then _G.QE_FindLeviathan = false end
 if _G.QE_WaitSeats == nil then _G.QE_WaitSeats = true end
 if _G.QE_NoAutoEquip == nil then _G.QE_NoAutoEquip = false end
 if _G.QE_AllowFastAutoEquip == nil then _G.QE_AllowFastAutoEquip = false end
+if _G.QE_AutoDestroyIdk == nil then _G.QE_AutoDestroyIdk = false end
 if _G.QE_FollowTargets == nil then
     _G.QE_FollowTargets = {}
     if _G.FollowTarget and _G.FollowTarget ~= "" and _G.FollowTarget ~= "--" then
@@ -7047,6 +7049,31 @@ local function qeEventAllowed(modelName)
         if string.gsub(string.lower(tostring(name)), "%s+", "") == clean then return true end
     end
     return false
+end
+
+local function qeFilteredSeaMob(maxDistance)
+    local _, hrp = qeParts()
+    if not hrp then return nil, nil end
+    local best, bestDist = nil, nil
+    for _, folderName in ipairs({ "Enemies", "SeaBeasts", "Mobs" }) do
+        local folder = workspace:FindFirstChild(folderName)
+        if folder then
+            for _, model in ipairs(folder:GetChildren()) do
+                if model:IsA("Model") and qeEventAllowed(model.Name) then
+                    local root = model:FindFirstChild("HumanoidRootPart")
+                        or model:FindFirstChild("Head") or model.PrimaryPart
+                    if root and root.Parent then
+                        local dist = (root.Position - hrp.Position).Magnitude
+                        if dist <= maxDistance and (not bestDist or dist < bestDist) then
+                            best, bestDist = model, dist
+                        end
+                    end
+                end
+            end
+        end
+    end
+    if best then return best, (best:FindFirstChild("HumanoidRootPart") or best.PrimaryPart) end
+    return nil, nil
 end
 
 local function qeCollectTargets(origin, range, includePlayers)
@@ -7457,6 +7484,103 @@ task.spawn(function()
     end
 end)
 
+local qeDestroyPhase = "idle"
+local qeDestroyResetDone = false
+
+task.spawn(function()
+    while true do
+        task.wait(1)
+        if not _G.QE_AutoDestroyIdk or not _G.AutoLeviathanFull then
+            qeDestroyPhase = "idle"
+        else
+            pcall(function()
+                local status = qeBribeStatus()
+                local map = workspace:FindFirstChild("Map")
+                local heart = map and map:FindFirstChild("FrozenHeart")
+                local spawned = qeLeviathanSpawned()
+                if spawned then
+                    qeDestroyPhase = "leviathan"
+                    if qeHuntReady() then
+                        SeaAPI.FightLeviathan(nil, 6)
+                    end
+                    return
+                end
+                if heart then
+                    qeDestroyPhase = "heart"
+                    SetStatus("Auto Destroy: heart found, returning to Tiki")
+                    HeartFinishPhase()
+                    return
+                end
+                if status == -1 then
+                    qeDestroyResetDone = false
+                    qeDestroyPhase = "farm"
+                    local boat = GetOwnBoat()
+                    if not boat then
+                        BuyOwnBoat("Auto Destroy: buying boat to farm events")
+                        local waitStart = os.clock()
+                        while _G.AutoLeviathanFull and os.clock() - waitStart < 20 do
+                            boat = GetOwnBoat()
+                            if boat then break end
+                            task.wait(0.5)
+                        end
+                    end
+                    local mob, root = qeFilteredSeaMob(5000)
+                    if mob and root then
+                        Unseat()
+                        SetStatus("Auto Destroy: farming " .. mob.Name .. " while cooldown lasts")
+                        SeaAPI.FightSeaEvent(mob, root, false)
+                    else
+                        local b = GetOwnBoat()
+                        local seat = b and b:FindFirstChild("VehicleSeat")
+                        if seat then
+                            if not IsSittingOn(seat) then
+                                BoardSeatRetry(seat)
+                            else
+                                SetStatus("Auto Destroy: patrolling while cooldown lasts")
+                                SailBoatStream(seat, _G.BoatSpeed)
+                            end
+                        end
+                    end
+                    return
+                end
+                if qeDestroyPhase == "farm" and not qeDestroyResetDone then
+                    qeDestroyResetDone = true
+                    SetStatus("Auto Destroy: cooldown over, resetting")
+                    if type(_G.RJR_ResetCharacterAtTiki) == "function" then
+                        pcall(_G.RJR_ResetCharacterAtTiki, "Auto Destroy: cooldown over")
+                    end
+                    task.wait(2)
+                end
+                qeDestroyPhase = "setup"
+                local boat = GetOwnBoat()
+                if not boat then
+                    BuyOwnBoat("Auto Destroy: buying boat for next Leviathan")
+                    local waitStart = os.clock()
+                    while _G.AutoLeviathanFull and os.clock() - waitStart < 20 do
+                        boat = GetOwnBoat()
+                        if boat then break end
+                        task.wait(0.5)
+                    end
+                end
+                if not _G.SoloSeaFarm and not qeAllSelectedSeated() then
+                    SetStatus("Auto Destroy: waiting selected players to board")
+                    return
+                end
+                if status ~= 5 then
+                    SetStatus("Auto Destroy: paying spy")
+                    qePaySpy()
+                    task.wait(1)
+                    status = qeBribeStatus()
+                end
+                if status == 5 then
+                    qeDestroyPhase = "hunt"
+                    RunNav(CaptainHuntPhase)
+                end
+            end)
+        end
+    end
+end)
+
 task.spawn(function()
     while true do
         task.wait(0.12)
@@ -7644,6 +7768,17 @@ QETab:AddToggle("qe.noequip", {
     Title = "No Auto Equip (use held item)",
     Default = _G.QE_NoAutoEquip,
     Callback = function(state) _G.QE_NoAutoEquip = state end,
+})
+QETab:AddToggle("qe.destroy", {
+    Title = "Auto Destroy Idk",
+    Description = "After a full Leviathan: rebuy the boat, farm the filtered Sea Events until the cooldown ends, reset, wait for the selected players, pay the spy automatically and repeat the whole Leviathan.",
+    Default = _G.QE_AutoDestroyIdk,
+    Callback = function(state)
+        _G.QE_AutoDestroyIdk = state
+        qeDestroyPhase = "idle"
+        qeDestroyResetDone = false
+        SaveConfig()
+    end,
 })
 QETab:AddSection("Hunt Team")
 local qePlayerValues = {}
