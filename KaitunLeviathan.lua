@@ -29,7 +29,8 @@ local CommF = Remotes and Remotes:FindFirstChild("CommF_")
 local CommE = Remotes and Remotes:FindFirstChild("CommE")
 local Validator2 = Remotes and Remotes:FindFirstChild("Validator2")
 local RegisterAttack = Net and Net:FindFirstChild("RE/RegisterAttack")
-local RegisterHit = Net and Net:FindFirstChild("RE/RegisterHit")
+local RegisterHit = nil
+local NetApi = nil
 local ShootGunEvent = Net and Net:FindFirstChild("RE/ShootGunEvent")
 local SeedRemote = Net and Net:FindFirstChild("seed")
 
@@ -43,8 +44,15 @@ local Defaults = {
     DragonstormMode = "Spread Damage",
     BribeSpy = true,
     AutoSailBackTiki = true,
+    HuntPartner = "",
+    WalkOnWater = false,
     AutoHaki = true,
+    AutoKen = false,
+    AutoV3 = false,
+    AutoV4 = false,
     AutoSkills = true,
+    RemoveFog = false,
+    FPSBoost = false,
     AttackRange = 500,
     BoatSpeed = 220,
     ShowStatus = true,
@@ -101,6 +109,9 @@ end
 
 loadConfig()
 
+G.BoatSpeed = math.clamp(tonumber(G.BoatSpeed) or 220, 50, 400)
+G.AttackRange = math.clamp(tonumber(G.AttackRange) or 500, 100, 1500)
+
 local StatusText = "Ready"
 local StatusListeners = {}
 local SendNotify = function() end
@@ -122,6 +133,12 @@ local function refreshRemotes()
     CommE = CommE or (Remotes and Remotes:FindFirstChild("CommE"))
     Validator2 = Validator2 or (Remotes and Remotes:FindFirstChild("Validator2"))
     RegisterAttack = RegisterAttack or (Net and Net:FindFirstChild("RE/RegisterAttack"))
+    if not NetApi and Net then
+        pcall(function() NetApi = require(Net) end)
+    end
+    if NetApi and type(NetApi.RemoteEvent) == "function" then
+        pcall(function() RegisterHit = NetApi:RemoteEvent("RegisterHit", true) end)
+    end
     RegisterHit = RegisterHit or (Net and Net:FindFirstChild("RE/RegisterHit"))
     ShootGunEvent = ShootGunEvent or (Net and Net:FindFirstChild("RE/ShootGunEvent"))
     SeedRemote = SeedRemote or (Net and Net:FindFirstChild("seed"))
@@ -296,6 +313,31 @@ local function stopTween()
 end
 
 RunService.Heartbeat:Connect(function(dt)
+    local wChar, wHrp, wHum = getParts()
+    local waterPart = workspace:FindFirstChild("QuantumWaterPlatform")
+    if G.WalkOnWater and wHrp and wHum and not wHum.SeatPart and wHum.Health > 0 then
+        if not waterPart or not waterPart:IsA("BasePart") then
+            waterPart = Instance.new("Part")
+            waterPart.Name = "QuantumWaterPlatform"
+            waterPart.Size = Vector3.new(12, 1, 12)
+            waterPart.Anchored = true
+            waterPart.CanCollide = true
+            waterPart.CanTouch = false
+            waterPart.CanQuery = false
+            waterPart.Transparency = 1
+            waterPart.CastShadow = false
+            waterPart.Parent = workspace
+        end
+        pcall(function()
+            waterPart.CFrame = CFrame.new(wHrp.Position.X, wHrp.Position.Y - 3.5, wHrp.Position.Z)
+            if wHrp.Position.Y < 4 then
+                wHrp.CFrame = CFrame.new(wHrp.Position.X, 4, wHrp.Position.Z)
+                    * (wHrp.CFrame - wHrp.CFrame.Position)
+            end
+        end)
+    elseif waterPart then
+        pcall(function() waterPart:Destroy() end)
+    end
     if G.StopTween then return end
     local _, hrp, hum = getParts()
     if not hrp or (hum and hum.SeatPart) or Tweening then return end
@@ -353,21 +395,32 @@ local function isAlive(model)
     return hum ~= nil or (health and health:IsA("ValueBase")) or true
 end
 
+local leviathanCache, leviathanCacheAt = nil, 0
+
 local function findLeviathan()
-    local seaBeasts = workspace:FindFirstChild("SeaBeasts")
-    if not seaBeasts then return nil, nil end
-    for _, child in ipairs(seaBeasts:GetChildren()) do
-        if child.Name == "Leviathan Segment" and isAlive(child) then
-            local root = modelRoot(child)
-            if root then return child, root end
+    local now = os.clock()
+    if leviathanCache and now - leviathanCacheAt < 0.25 then
+        local cachedModel, cachedRoot = leviathanCache[1], leviathanCache[2]
+        if cachedModel and cachedModel.Parent and isAlive(cachedModel) then
+            return cachedModel, cachedRoot
+        end
+        leviathanCache = nil
+    end
+    local folders = { workspace:FindFirstChild("SeaBeasts"), workspace:FindFirstChild("Enemies"), workspace }
+    for _, folder in ipairs(folders) do
+        if folder then
+            for _, child in ipairs(folder:GetChildren()) do
+                if typeof(child) == "Instance" and string.find(child.Name, "Leviathan", 1, true) and isAlive(child) then
+                    local root = modelRoot(child)
+                    if root then
+                        leviathanCache, leviathanCacheAt = { child, root }, now
+                        return child, root
+                    end
+                end
+            end
         end
     end
-    for _, child in ipairs(seaBeasts:GetChildren()) do
-        if child.Name == "Leviathan" and isAlive(child) then
-            local root = modelRoot(child)
-            if root then return child, root end
-        end
-    end
+    leviathanCache, leviathanCacheAt = nil, now
     return nil, nil
 end
 
@@ -382,7 +435,11 @@ local function facePosition(position)
     local flat = Vector3.new(position.X - hrp.Position.X, 0, position.Z - hrp.Position.Z)
     if flat.Magnitude < 0.5 then return end
     pcall(function()
+        if hum then hum.AutoRotate = false end
         hrp.CFrame = CFrame.lookAt(hrp.Position, hrp.Position + flat.Unit)
+        if HoldCFrame then
+            HoldCFrame = CFrame.lookAt(HoldCFrame.Position, HoldCFrame.Position + flat.Unit)
+        end
     end)
 end
 
@@ -426,6 +483,21 @@ local function autoHaki()
     local char = getParts()
     if char and not char:FindFirstChild("HasBuso") then
         pcall(function() CommF:InvokeServer("Buso") end)
+    end
+end
+
+local function autoRace()
+    if G.AutoKen and CommE then
+        pcall(function() CommE:FireServer("Ken", true) end)
+    end
+    if G.AutoV3 and CommE then
+        pcall(function() CommE:FireServer("ActivateAbility") end)
+    end
+    if G.AutoV4 and LocalPlayer.Backpack then
+        local awakening = LocalPlayer.Backpack:FindFirstChild("Awakening")
+        if awakening and awakening:FindFirstChild("RemoteFunction") then
+            pcall(function() awakening.RemoteFunction:InvokeServer(true) end)
+        end
     end
 end
 
@@ -488,6 +560,12 @@ local function buildHitList(origin, range)
     table.sort(list, function(a, b) return a.distance < b.distance end)
     HitCache, HitOrigin, HitAt = list, origin, now
     return list
+end
+
+local function hasTargetInRange(range)
+    local _, hrp = getParts()
+    if not hrp then return false end
+    return #buildHitList(hrp.Position, range or G.AttackRange) > 0
 end
 
 local function attackToken()
@@ -810,10 +888,18 @@ local function fightLeviathan()
             autoSkills()
         end
         autoHaki()
+        autoRace()
         task.wait(0.08)
     end
     AttackTarget, AttackStand = nil, nil
     return true
+end
+
+local function getPartnerRoot()
+    if not G.HuntPartner or G.HuntPartner == "" or G.HuntPartner == "None" then return nil end
+    local partner = Players:FindFirstChild(G.HuntPartner)
+    local char = partner and partner.Character
+    return char and (char:FindFirstChild("HumanoidRootPart") or char.PrimaryPart) or nil
 end
 
 local function findBoatAndSail()
@@ -830,21 +916,36 @@ local function findBoatAndSail()
             seat = boat and boat:FindFirstChild("VehicleSeat")
             if not seat or not boardSeat(seat) then return false end
         end
-        if os.clock() - lastCheck >= 0.3 then
-            lastCheck = os.clock()
-            setStatus("Searching for Leviathan")
-        end
         local _, hrp = getParts()
         if not hrp then break end
-        local target = G.AutoSailBackTiki and CruiseFar or CruiseFar
-        local flat = Vector3.new(target.Position.X - hrp.Position.X, 0, target.Position.Z - hrp.Position.Z)
-        if flat.Magnitude > 0 then
-            local step = math.min(flat.Magnitude, (G.BoatSpeed or 220) * RunService.Heartbeat:Wait())
-            local np = hrp.Position + flat.Unit * step
-            pcall(function()
-                hrp.CFrame = CFrame.lookAt(Vector3.new(np.X, 120, np.Z), Vector3.new(np.X, 120, np.Z - 1))
-                hrp.AssemblyLinearVelocity = Vector3.zero
-            end)
+        local partnerRoot = getPartnerRoot()
+        local target = CruiseFar
+        local waitingForPartner = false
+        if partnerRoot then
+            local partnerDist = (partnerRoot.Position - hrp.Position).Magnitude
+            if partnerDist <= 120 then
+                setStatus("Waiting for partner: " .. tostring(G.HuntPartner))
+                task.wait(0.5)
+                waitingForPartner = true
+            else
+                target = CFrame.new(partnerRoot.Position)
+            end
+        end
+        if not waitingForPartner then
+            if os.clock() - lastCheck >= 0.3 then
+                lastCheck = os.clock()
+                setStatus("Searching for Leviathan")
+            end
+            local flat = Vector3.new(target.Position.X - hrp.Position.X, 0, target.Position.Z - hrp.Position.Z)
+            if flat.Magnitude > 0 then
+                local step = math.min(flat.Magnitude, (G.BoatSpeed or 220) * (1 / 60))
+                local np = hrp.Position + flat.Unit * step
+                local y = G.WalkOnWater and math.max(hrp.Position.Y, 8) or 120
+                pcall(function()
+                    hrp.CFrame = CFrame.lookAt(Vector3.new(np.X, y, np.Z), Vector3.new(np.X, y, np.Z - 1))
+                    hrp.AssemblyLinearVelocity = Vector3.zero
+                end)
+            end
         end
     end
     return false
@@ -900,7 +1001,9 @@ local function startLoops()
     task.spawn(function() mainLeviathanLoop(generation) end)
     task.spawn(function()
         while G.FullyLeviathan and generation == LoopGeneration and not Respawning do
-            if not getParts() or not isSeated(getOwnBoat() and getOwnBoat():FindFirstChild("VehicleSeat") or nil) then
+            local char, _, hum = getParts()
+            local seated = hum ~= nil and hum.SeatPart ~= nil
+            if char and not seated and hasTargetInRange(G.AttackRange) then
                 fastAttack()
             end
             task.wait(G.FastAttack and 0.12 or 0.5)
@@ -909,7 +1012,9 @@ local function startLoops()
     task.spawn(function()
         while G.FullyLeviathan and generation == LoopGeneration and not Respawning do
             local _, _, hum = getParts()
-            if hum and hum.SeatPart == nil then autoSkills() end
+            if hum and hum.SeatPart == nil and hasTargetInRange(150) then
+                autoSkills()
+            end
             task.wait(0.8)
         end
     end)
@@ -920,6 +1025,8 @@ local function stopLoops()
     stopTween()
     noClip(false)
     AttackTarget, AttackStand = nil, nil
+    local _, _, hum = getParts()
+    if hum then pcall(function() hum.AutoRotate = true end) end
 end
 
 local function onDeath()
@@ -1018,6 +1125,32 @@ task.spawn(function()
     end
 end)
 
+local function applyPerformance()
+    pcall(function()
+        local lighting = game:GetService("Lighting")
+        if G.RemoveFog then
+            local layers = lighting:FindFirstChild("LightingLayers")
+            if layers then layers:Destroy() end
+            lighting.FogEnd = 100000
+        end
+        if G.FPSBoost then
+            lighting.GlobalShadows = false
+            for _, object in ipairs(workspace:GetDescendants()) do
+                if object:IsA("ParticleEmitter") or object:IsA("Trail") or object:IsA("Smoke") then
+                    object.Enabled = false
+                end
+            end
+        end
+    end)
+end
+
+task.spawn(function()
+    while true do
+        pcall(applyPerformance)
+        task.wait(3)
+    end
+end)
+
 local Fluent = nil
 local Window = nil
 
@@ -1092,11 +1225,49 @@ local function buildUI()
         end
     end)
     toggle(Main, "main.status", "Show status overlay", "ShowStatus")
+    toggle(Main, "main.fog", "Remove Fog", "RemoveFog")
+    toggle(Main, "main.fps", "FPS Boost", "FPSBoost")
+    Main:AddButton({
+        Title = "Save Config",
+        Callback = function()
+            saveConfig()
+            notify("Quantum Kaitun", "Config saved")
+        end,
+    })
 
     toggle(Hunt, "hunt.find", "Auto Find Leviathan", "AutoFindLeviathan")
     toggle(Hunt, "hunt.ignore", "Ignore Sea Events While Finding", "IgnoreSeaEvents")
     toggle(Hunt, "hunt.bribe", "Bribe the Spy", "BribeSpy")
     toggle(Hunt, "hunt.sailback", "Auto Sail Back to Tiki", "AutoSailBackTiki")
+
+    local partnerValues = { "None" }
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer then partnerValues[#partnerValues + 1] = player.Name end
+    end
+    local partnerDropdown = Hunt:AddDropdown("hunt.partner", {
+        Title = "Hunt With Player",
+        Values = partnerValues,
+        Default = G.HuntPartner ~= "" and G.HuntPartner or "None",
+        Multi = false,
+        Callback = function(value)
+            G.HuntPartner = value == "None" and "" or value
+            saveConfig()
+        end,
+    })
+    Hunt:AddButton({
+        Title = "Refresh Player List",
+        Callback = function()
+            local values = { "None" }
+            for _, player in ipairs(Players:GetPlayers()) do
+                if player ~= LocalPlayer then values[#values + 1] = player.Name end
+            end
+            pcall(function()
+                partnerDropdown.Values = values
+                if partnerDropdown.Refresh then partnerDropdown:Refresh(values) end
+            end)
+            notify("Quantum Kaitun", "Player list refreshed")
+        end,
+    })
 
     toggle(Combat, "combat.fast", "Fast Attack", "FastAttack")
     slider(Combat, "combat.delay", "Fast Attack Delay", "FastAttackDelay", 0, 1)
@@ -1112,10 +1283,14 @@ local function buildUI()
         end,
     })
     toggle(Combat, "combat.haki", "Auto Haki", "AutoHaki")
+    toggle(Combat, "combat.ken", "Auto Ken", "AutoKen")
+    toggle(Combat, "combat.v3", "Auto Race V3", "AutoV3")
+    toggle(Combat, "combat.v4", "Auto Race V4", "AutoV4")
     toggle(Combat, "combat.skills", "Auto Skills", "AutoSkills")
     slider(Combat, "combat.range", "Attack Range", "AttackRange", 100, 1500)
 
-    slider(Boat, "boat.speed", "Boat Speed", "BoatSpeed", 50, 500)
+    slider(Boat, "boat.speed", "Boat Speed (max 400)", "BoatSpeed", 50, 400)
+    toggle(Boat, "boat.water", "Walk on Water", "WalkOnWater")
 
     toggle(Web, "web.enabled", "Webhook Enabled", "WebhookEnabled")
     input(Web, "web.url", "Webhook URL", "WebhookURL")
