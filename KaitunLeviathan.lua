@@ -606,6 +606,15 @@ local ConfigKeys = {
     "QE_FollowTargets",
     "QE_HuntEvents",
     "QE_AutoDestroyIdk",
+    "QE_BananaAutoFind",
+    "QE_BananaAutoStart",
+    "QE_BananaAutoHeart",
+    "QE_BananaReturnTiki",
+    "QE_BananaReturnHydra",
+    "QE_BananaAutoBuySpy",
+    "QE_BananaUseOwnBoat",
+    "QE_BananaBoatSpeed",
+    "QE_BananaOwner",
 }
 local function EnsureConfigFolder()
     if typeof(isfolder) == "function" and typeof(makefolder) == "function" then
@@ -6979,6 +6988,15 @@ if _G.QE_WaitSeats == nil then _G.QE_WaitSeats = true end
 if _G.QE_NoAutoEquip == nil then _G.QE_NoAutoEquip = false end
 if _G.QE_AllowFastAutoEquip == nil then _G.QE_AllowFastAutoEquip = false end
 if _G.QE_AutoDestroyIdk == nil then _G.QE_AutoDestroyIdk = false end
+if _G.QE_BananaAutoFind == nil then _G.QE_BananaAutoFind = false end
+if _G.QE_BananaAutoStart == nil then _G.QE_BananaAutoStart = false end
+if _G.QE_BananaAutoHeart == nil then _G.QE_BananaAutoHeart = false end
+if _G.QE_BananaReturnTiki == nil then _G.QE_BananaReturnTiki = false end
+if _G.QE_BananaReturnHydra == nil then _G.QE_BananaReturnHydra = false end
+if _G.QE_BananaAutoBuySpy == nil then _G.QE_BananaAutoBuySpy = false end
+if _G.QE_BananaUseOwnBoat == nil then _G.QE_BananaUseOwnBoat = true end
+if _G.QE_BananaBoatSpeed == nil then _G.QE_BananaBoatSpeed = 350 end
+if _G.QE_BananaOwner == nil then _G.QE_BananaOwner = "" end
 if _G.QE_FollowTargets == nil then
     _G.QE_FollowTargets = {}
     if _G.FollowTarget and _G.FollowTarget ~= "" and _G.FollowTarget ~= "--" then
@@ -7469,9 +7487,177 @@ task.spawn(function()
     end
 end)
 
+local qeBananaBoatDealer = CFrame.new(-16204.0810546875, 9.0863618850708, 479.2259521484375)
+local qeBananaPatrolA = CFrame.new(-118834.515625, 160, -78.9505844116211) * CFrame.new(0, 0, 99999999)
+local qeBananaPatrolB = CFrame.new(-32975.9921875, 160, 25963.7109375)
+local qeBananaTikiRoute = {
+    Vector3.new(7415.83251953125, 24.0008487701416, -6664.6826171875),
+    Vector3.new(-4703.16015625, 24.000019073486328, -7.822202682495117),
+    Vector3.new(-8762.3310546875, 23.99974822998047, -452.2586669921875),
+    Vector3.new(-15018.0634765625, 23.999053955078125, 199.0315399169922),
+    Vector3.new(-16065.728515625, 23.9991512298584, 421.8982238769531),
+}
+local qeBananaHydraRoute = {
+    Vector3.new(7415.83251953125, 24.0008487701416, -6664.6826171875),
+    Vector3.new(1162.8353271484375, 24.00018882751465, -1825.8121337890625),
+    Vector3.new(2517.887451171875, 24.000118255615234, 5109.43115234375),
+    Vector3.new(5172.72607421875, 23.999813079833984, 3893.62451171875),
+    Vector3.new(5203.80908203125, 24.001039505004883, 2013.0904541015625),
+}
+
+local function qeBananaGetBoat()
+    local owner = _G.QE_BananaUseOwnBoat and qeLocal.Name or _G.QE_BananaOwner
+    local boats = workspace:FindFirstChild("Boats")
+    if not boats then return nil end
+    for _, boat in ipairs(boats:GetChildren()) do
+        if boat:IsA("Model") then
+            local ownerValue = boat:FindFirstChild("Owner")
+            local humanoidValue = boat:FindFirstChild("Humanoid")
+            if ownerValue and humanoidValue and tostring(ownerValue.Value) == tostring(owner)
+                and tonumber(humanoidValue.Value) > 0 and boat:FindFirstChild("VehicleSeat") then
+                return boat
+            end
+        end
+    end
+    return nil
+end
+
+local function qeBananaTweenSeat(seat, target, speed)
+    if not seat or not target then return false end
+    local distance = (target.Position - seat.Position).Magnitude
+    local duration = math.max(distance / math.max(tonumber(_G.QE_BananaBoatSpeed) or speed or 350, 50), 0.1)
+    local ok = pcall(function()
+        local tween = TweenService:Create(seat, TweenInfo.new(duration, Enum.EasingStyle.Quad), { CFrame = target })
+        tween:Play()
+        tween.Completed:Wait()
+    end)
+    return ok
+end
+
+local function qeBananaFrozenDimension()
+    local origin = workspace:FindFirstChild("_WorldOrigin")
+    local locations = origin and origin:FindFirstChild("Locations")
+    return locations and locations:FindFirstChild("Frozen Dimension")
+end
+
+local function qeBananaFind()
+    if qeBananaFrozenDimension() then return end
+    local boat = qeBananaGetBoat()
+    if not boat then
+        local _, hrp = qeParts()
+        if hrp and (qeBananaBoatDealer.Position - hrp.Position).Magnitude > 8 then
+            _tp(qeBananaBoatDealer)
+        elseif qeCommF then
+            pcall(function() qeCommF:InvokeServer("BuyBoat", "Beast Hunter") end)
+            task.wait(3)
+        end
+        return
+    end
+    local seat = boat:FindFirstChild("VehicleSeat")
+    if not seat then return end
+    if not IsSittingOn(seat) then
+        BoardSeatRetry(seat)
+        return
+    end
+    local target = (math.floor(os.clock() / 60) % 2 == 0) and qeBananaPatrolA or qeBananaPatrolB
+    SetStatus("Banana: patrulhando para encontrar o Leviathan")
+    qeBananaTweenSeat(seat, target, 350)
+end
+
+local function qeBananaStart()
+    if not qeBananaFrozenDimension() then return end
+    local watcher = nil
+    local npcs = workspace:FindFirstChild("NPCs")
+    if npcs then
+        for _, npc in ipairs(npcs:GetChildren()) do
+            if npc.Name == "Frozen Watcher" then watcher = npc end
+        end
+    end
+    local rsNpcs = RS:FindFirstChild("NPCs")
+    if rsNpcs then
+        for _, npc in ipairs(rsNpcs:GetChildren()) do
+            if npc.Name == "Frozen Watcher" then watcher = npc end
+        end
+    end
+    if not watcher then return end
+    local root = watcher:FindFirstChild("HumanoidRootPart")
+    if not root then return end
+    local _, hrp = qeParts()
+    if hrp and (root.Position - hrp.Position).Magnitude < 8 then
+        if qeCommF then pcall(function() qeCommF:InvokeServer("OpenLeviathanGate") end) end
+    else
+        _tp(root.CFrame)
+    end
+end
+
+local function qeBananaShootHeart()
+    local map = workspace:FindFirstChild("Map")
+    local heart = map and map:FindFirstChild("FrozenHeart")
+    if not heart then return end
+    local inside = heart:FindFirstChild("Inside")
+    local cube = heart:FindFirstChild("Cube")
+    if not inside or not cube then return end
+    if inside:GetAttribute("Harpooned") then return end
+    local boat = qeBananaGetBoat()
+    if not boat then return end
+    local seat = boat:FindFirstChild("VehicleSeat")
+    local harpoon = boat:FindFirstChild("Harpoon")
+    if not seat or not harpoon then return end
+    local target = CFrame.new(cube.Position.X, boat.WorldPivot.Y, cube.Position.Z) * CFrame.new(0, 0, 300)
+    if (target.Position - seat.Position).Magnitude > 5 then
+        SetStatus("Banana: alinhando harpoon no Frozen Heart")
+        qeBananaTweenSeat(seat, target, 150)
+        return
+    end
+    local char = qeLocal.Character
+    local humanoid = char and char:FindFirstChildOfClass("Humanoid")
+    local seatPart = humanoid and humanoid.SeatPart
+    if seatPart and seatPart.Parent and seatPart.Parent.Name == "Harpoon" then
+        if qeCommF then
+            pcall(function()
+                qeCommF:InvokeServer("FireHarpoon", 0.7853981633974483, 4.4342573293783646e-4, harpoon, workspace:GetServerTimeNow())
+            end)
+        end
+    else
+        local harpoonSeat = harpoon:FindFirstChild("Seat")
+        if harpoonSeat then BoardSeatRetry(harpoonSeat) end
+    end
+end
+
+local function qeBananaDriveRoute(route)
+    local boat = qeBananaGetBoat()
+    if not boat then return false end
+    local seat = boat:FindFirstChild("VehicleSeat")
+    if not seat then return false end
+    if not IsSittingOn(seat) then BoardSeatRetry(seat) end
+    for index, point in ipairs(route) do
+        if not _G.QE_BananaReturnTiki and not _G.QE_BananaReturnHydra then return false end
+        SetStatus("Banana: navegando para " .. (index == #route and "destino final" or "waypoint " .. index))
+        qeBananaTweenSeat(seat, CFrame.lookAt(point, point + Vector3.new(0, 0, 1)), 350)
+    end
+    return true
+end
+
 task.spawn(function()
     while true do
-        task.wait(0.5)
+        task.wait(1.5)
+        pcall(function()
+            if _G.QE_BananaAutoBuySpy and qeCommF then
+                local status = qeCommF:InvokeServer("InfoLeviathan", "1")
+                if status ~= -1 and status ~= 5 then qePaySpy() end
+            end
+            if _G.QE_BananaAutoFind then qeBananaFind() end
+            if _G.QE_BananaAutoStart then qeBananaStart() end
+            if _G.QE_BananaAutoHeart then qeBananaShootHeart() end
+            if _G.QE_BananaReturnTiki then qeBananaDriveRoute(qeBananaTikiRoute) end
+            if _G.QE_BananaReturnHydra then qeBananaDriveRoute(qeBananaHydraRoute) end
+        end)
+    end
+end)
+
+task.spawn(function()
+    while true do
+        task.wait(0.2)
         if _G.QE_FindLeviathan then
             local status = qeBribeStatus()
             if status and status ~= 5 and status ~= -1 then qePaySpy() end
@@ -7704,6 +7890,88 @@ task.spawn(function()
         end
     end
 end)
+
+local BananaSection = Tabs.Status:AddSection("Banana Leviathan")
+BananaSection:AddButton({
+    Title = "Buy Spy (Banana)",
+    Description = "Opens the Spy dialogue.",
+}, function()
+    pcall(function()
+        local dialogues = require(RS:FindFirstChild("DialoguesList"))
+        local controller = require(RS:FindFirstChild("DialogueController"))
+        controller:Start(dialogues.Spy)
+    end)
+end)
+BananaSection:AddToggle("banana.autospy", {
+    Title = "Auto Buy Spy (Banana)",
+    Default = _G.QE_BananaAutoBuySpy,
+    Callback = function(state) _G.QE_BananaAutoBuySpy = state; SaveConfig() end,
+})
+BananaSection:AddToggle("banana.find", {
+    Title = "Auto Find Leviathan (Banana)",
+    Description = "Buys a Beast Hunter and patrols the Banana Cat routes until Frozen Dimension spawns.",
+    Default = _G.QE_BananaAutoFind,
+    Callback = function(state) _G.QE_BananaAutoFind = state; SaveConfig() end,
+})
+BananaSection:AddToggle("banana.start", {
+    Title = "Auto Start Leviathan (Banana)",
+    Description = "Goes to the Frozen Watcher and opens the Leviathan gate.",
+    Default = _G.QE_BananaAutoStart,
+    Callback = function(state) _G.QE_BananaAutoStart = state; SaveConfig() end,
+})
+BananaSection:AddToggle("banana.heart", {
+    Title = "Auto Fire Shoot Heart (Banana)",
+    Description = "Aligns the Beast Hunter harpoon and fires at the Frozen Heart with the Banana constants.",
+    Default = _G.QE_BananaAutoHeart,
+    Callback = function(state) _G.QE_BananaAutoHeart = state; SaveConfig() end,
+})
+BananaSection:AddToggle("banana.tiki", {
+    Title = "Drive Boat To Tiki (Banana)",
+    Description = "Automatically sails the boat back to Tiki using the Banana waypoints.",
+    Default = _G.QE_BananaReturnTiki,
+    Callback = function(state)
+        _G.QE_BananaReturnTiki = state
+        if state then _G.QE_BananaReturnHydra = false end
+        SaveConfig()
+    end,
+})
+BananaSection:AddToggle("banana.hydra", {
+    Title = "Drive Boat To Hydra (Banana)",
+    Description = "Automatically sails the boat to Hydra using the Banana waypoints.",
+    Default = _G.QE_BananaReturnHydra,
+    Callback = function(state)
+        _G.QE_BananaReturnHydra = state
+        if state then _G.QE_BananaReturnTiki = false end
+        SaveConfig()
+    end,
+})
+BananaSection:AddToggle("banana.ownboat", {
+    Title = "Use Your Beast Hunter",
+    Default = _G.QE_BananaUseOwnBoat,
+    Callback = function(state) _G.QE_BananaUseOwnBoat = state; SaveConfig() end,
+})
+BananaSection:AddDropdown("banana.owner", {
+    Title = "Select Owner Beast Hunter",
+    Values = (function()
+        local list = {}
+        for _, player in ipairs(qePlayers:GetPlayers()) do
+            if player ~= qeLocal then list[#list + 1] = player.Name end
+        end
+        if #list == 0 then list = { qeLocal.Name } end
+        return list
+    end)(),
+    Default = (_G.QE_BananaOwner ~= "" and _G.QE_BananaOwner) or qeLocal.Name,
+    Multi = false,
+    Callback = function(value) _G.QE_BananaOwner = value; SaveConfig() end,
+})
+BananaSection:AddSlider("banana.speed", {
+    Title = "Boat Speed (Banana)",
+    Default = _G.QE_BananaBoatSpeed,
+    Min = 50,
+    Max = 500,
+    Rounding = 0,
+    Callback = function(value) _G.QE_BananaBoatSpeed = value; SaveConfig() end,
+})
 
 task.spawn(function()
     while true do
