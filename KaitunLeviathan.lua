@@ -610,6 +610,7 @@ local ConfigKeys = {
     "QE_DashSpeed",
     "QE_DashEnabled",
     "QE_BananaAutoFind",
+    "QE_BananaNoEventNoEquip",
     "QE_BananaAutoStart",
     "QE_BananaAutoHeart",
     "QE_BananaReturnTiki",
@@ -6989,6 +6990,7 @@ if _G.QE_AutoDestroySolo == nil then _G.QE_AutoDestroySolo = false end
 if _G.QE_DashSpeed == nil then _G.QE_DashSpeed = 180 end
 if _G.QE_DashEnabled == nil then _G.QE_DashEnabled = true end
 if _G.QE_BananaAutoFind == nil then _G.QE_BananaAutoFind = false end
+if _G.QE_BananaNoEventNoEquip == nil then _G.QE_BananaNoEventNoEquip = true end
 if _G.QE_BananaAutoStart == nil then _G.QE_BananaAutoStart = false end
 if _G.QE_BananaAutoHeart == nil then _G.QE_BananaAutoHeart = false end
 if _G.QE_BananaReturnTiki == nil then _G.QE_BananaReturnTiki = false end
@@ -7059,6 +7061,7 @@ end
 local qeFacingReleaseUntil = 0
 
 local function qeReleaseFacing()
+    if type(_G.QE_BananaCancelTween) == "function" then pcall(_G.QE_BananaCancelTween) end
     local _, hrp, hum = qeParts()
     if not hrp or not hum then return end
     local camera = workspace.CurrentCamera
@@ -7234,6 +7237,18 @@ local function qePlayerTarget()
     return nil
 end
 
+local function qeWhitelistedEventReady()
+    if not _G.QE_BananaNoEventNoEquip then return true end
+    if IsOnBoat() then return false end
+    local _, hrp = qeParts()
+    if not hrp then return false end
+    for _, hit in ipairs(qeCollectTargets(hrp.Position, 900, false)) do
+        if hit.kind == "SeaEvent" and qeEventAllowed(hit.model.Name) then return true end
+        if hit.kind == "SeaBeast" and qeEventAllowed(hit.model.Name) then return true end
+    end
+    return false
+end
+
 local qeChosenWeapon = nil
 local qeLastWeaponEquip = 0
 local qeLastWeaponTool = nil
@@ -7242,6 +7257,7 @@ local qeWeaponChar = nil
 local function qeEquipWeapon()
     local char, _, hum = qeParts()
     if not char or not hum then return false end
+    if not qeWhitelistedEventReady() then return false end
     if qeWeaponChar ~= char then
         qeWeaponChar = char
         qeManualUnequip.weapon = false
@@ -7314,6 +7330,7 @@ local qeGunChar = nil
 local function qeEquipDragonstorm()
     local char, _, hum = qeParts()
     if not char or not hum then return false end
+    if not qeWhitelistedEventReady() then return false end
     if qeGunChar ~= char then
         qeGunChar = char
         qeManualUnequip.gun = false
@@ -7518,15 +7535,22 @@ local function qeHuntReady()
 end
 
 local function qeBribeStatus()
-    if not qeCommF then return nil end
-    local ok, result = pcall(function() return qeCommF:InvokeServer("InfoLeviathan", "1") end)
+    local remotes = RS:FindFirstChild("Remotes")
+    local comm = (remotes and remotes:FindFirstChild("CommF_")) or qeCommF
+    if not comm then return nil end
+    local ok, result = pcall(function() return comm:InvokeServer("InfoLeviathan", "1") end)
     if not ok then return nil end
+    if comm ~= qeCommF then qeCommF = comm end
     return tonumber(result)
 end
 
 local function qePaySpy()
-    if not qeCommF then return end
-    pcall(function() qeCommF:InvokeServer("InfoLeviathan", "2") end)
+    local remotes = RS:FindFirstChild("Remotes")
+    local comm = (remotes and remotes:FindFirstChild("CommF_")) or qeCommF
+    if not comm then return false end
+    local ok = pcall(function() comm:InvokeServer("InfoLeviathan", "2") end)
+    if ok and comm ~= qeCommF then qeCommF = comm end
+    return ok
 end
 
 local function qeLeviathanSpawned()
@@ -7590,17 +7614,66 @@ local function qeBananaGetBoat()
     return nil
 end
 
-local function qeBananaTweenSeat(seat, target, speed)
+local qeBananaTweenState = nil
+
+local function qeBananaCancelTween()
+    if qeBananaTweenState then
+        qeBananaTweenState.cancelled = true
+        qeBananaTweenState = nil
+    end
+end
+_G.QE_BananaCancelTween = qeBananaCancelTween
+
+local function qeBananaTweenSeat(seat, target)
     if not seat or not target then return false end
-    local distance = (target.Position - seat.Position).Magnitude
-    local configured = tonumber(_G.QE_BananaBoatSpeed) or tonumber(speed) or 140
-    local duration = math.max(distance / math.max(configured, 30), 1.5)
-    local ok = pcall(function()
-        local tween = TweenService:Create(seat, TweenInfo.new(duration, Enum.EasingStyle.Quad), { CFrame = target })
-        tween:Play()
-        tween.Completed:Wait()
+    if qeBananaTweenState and qeBananaTweenState.seat == seat
+        and qeBananaTweenState.target and (qeBananaTweenState.target.Position - target.Position).Magnitude < 50 then
+        return true
+    end
+    qeBananaCancelTween()
+    local speedSetting = math.max(tonumber(_G.QE_BananaBoatSpeed) or 140, 30)
+    local state = {
+        seat = seat,
+        target = target,
+        speed = speedSetting,
+        cap = speedSetting,
+        current = seat.CFrame,
+        paused = false,
+        cancelled = false,
+    }
+    qeBananaTweenState = state
+    task.spawn(function()
+        while not state.cancelled and seat.Parent do
+            local dt = RunService.Heartbeat:Wait()
+            if not state.paused then
+                local hum = qeLocal.Character and qeLocal.Character:FindFirstChildOfClass("Humanoid")
+                if not hum or hum.SeatPart ~= seat then break end
+                local remaining = (state.target.Position - state.current.Position).Magnitude
+                local step = math.min(state.speed, state.cap) * dt
+                if remaining <= math.max(15, step) then
+                    pcall(function()
+                        seat.CFrame = state.target
+                        seat.AssemblyLinearVelocity = Vector3.zero
+                        seat.AssemblyAngularVelocity = Vector3.zero
+                    end)
+                    if qeBananaTweenState == state then qeBananaTweenState = nil end
+                    break
+                end
+                if remaining > math.max(200, step * 4) then
+                    state.cap = math.max(state.speed * 0.65, 40)
+                elseif state.cap < state.speed then
+                    state.cap = math.min(state.cap * 1.02, state.speed)
+                end
+                state.current = state.current:Lerp(state.target, step / remaining)
+                pcall(function()
+                    seat.CFrame = state.current
+                    seat.AssemblyLinearVelocity = Vector3.zero
+                    seat.AssemblyAngularVelocity = Vector3.zero
+                end)
+            end
+        end
     end)
-    return ok
+    return true
 end
 
 local function qeBananaFrozenDimension()
@@ -7657,8 +7730,48 @@ local function qeBananaBoardSeat(seat)
     return false
 end
 
+local function qeBananaDangerCount()
+    local playerGui = qeLocal:FindFirstChild("PlayerGui")
+    local compass = playerGui and playerGui:FindFirstChild("Main")
+    compass = compass and compass:FindFirstChild("Compass")
+    compass = compass and compass:FindFirstChild("Frame")
+    local level = compass and compass:FindFirstChild("DangerLevel")
+    local text = compass and compass:FindFirstChild("DangerText")
+    if not level or not text or not level.Visible or not text.Visible then return 0 end
+    local label = level:FindFirstChild("TextLabel")
+    return tonumber(label and label.Text) or 0
+end
+
+local function qeBananaSeaEventNear()
+    local folder = workspace:FindFirstChild("SeaBeasts")
+    if not folder then return false end
+    local _, hrp = qeParts()
+    if not hrp then return false end
+    for _, model in ipairs(folder:GetChildren()) do
+        local root = model:FindFirstChild("HumanoidRootPart") or model.PrimaryPart
+        if root and (root.Position - hrp.Position).Magnitude < 900 then return true end
+    end
+    return false
+end
+
+local function qeBananaSetAltitude(seat, targetY)
+    if not seat then return end
+    pcall(function()
+        local delta = targetY - seat.Position.Y
+        if math.abs(delta) < 1 then return end
+        seat.CFrame = seat.CFrame * CFrame.new(0, delta, 0)
+        seat.AssemblyLinearVelocity = Vector3.zero
+        seat.AssemblyAngularVelocity = Vector3.zero
+    end)
+end
+
+local qeBananaCounting = false
+
 local function qeBananaFind()
-    if qeBananaFrozenDimension() then return end
+    if qeBananaFrozenDimension() then
+        qeBananaCancelTween()
+        return
+    end
     local boat = qeBananaEnsureBoat()
     if not boat then return end
     local seat = boat:FindFirstChild("VehicleSeat")
@@ -7667,8 +7780,33 @@ local function qeBananaFind()
         SetStatus("Banana: tentando embarcar no Beast Hunter")
         return
     end
-    local target = (math.floor(os.clock() / 60) % 2 == 0) and qeBananaPatrolA or qeBananaPatrolB
-    SetStatus("Banana: patrulhando para encontrar o Leviathan")
+    if seat.Position.Y < 150 then qeBananaSetAltitude(seat, 160) end
+    local danger = qeBananaDangerCount()
+    if danger > 0 and seat.Position.Y > 170 then
+        qeBananaCancelTween()
+        qeBananaSetAltitude(seat, 160)
+        qeBananaCounting = true
+        task.wait(0.5)
+    elseif seat.Position.Y < 150 then
+        qeBananaSetAltitude(seat, 160)
+        qeBananaCounting = false
+    end
+    if qeBananaSeaEventNear() and seat.Position.Y < 500 then
+        qeBananaCancelTween()
+        qeBananaSetAltitude(seat, 500)
+        task.wait(0.5)
+    elseif not qeBananaSeaEventNear() and seat.Position.Y > 300 then
+        qeBananaCancelTween()
+        qeBananaSetAltitude(seat, 160)
+        task.wait(0.5)
+    end
+    local high = seat.Position.Y >= 400
+    local patrolA = CFrame.new(qeBananaPatrolA.Position.X, high and 500 or 160, qeBananaPatrolA.Position.Z)
+        * qeBananaPatrolA.Rotation
+    local patrolB = CFrame.new(qeBananaPatrolB.Position.X, high and 500 or 160, qeBananaPatrolB.Position.Z)
+        * qeBananaPatrolB.Rotation
+    local target = (math.floor(os.clock() / 60) % 2 == 0) and patrolA or patrolB
+    SetStatus("Banana: " .. (qeBananaCounting and "contando mares" or "patrulhando") .. " para encontrar o Leviathan")
     qeBananaTweenSeat(seat, target)
 end
 
@@ -7750,9 +7888,11 @@ task.spawn(function()
     while true do
         task.wait(1.5)
         pcall(function()
-            if _G.QE_BananaAutoBuySpy and qeCommF then
-                local status = qeCommF:InvokeServer("InfoLeviathan", "1")
-                if status ~= -1 and status ~= 5 then qePaySpy() end
+            if _G.QE_BananaAutoBuySpy then
+                local status = qeBribeStatus()
+                if status ~= -1 and status ~= 5 then
+                    qePaySpy()
+                end
             end
             if _G.QE_BananaAutoFind then qeBananaFind() end
             if _G.QE_BananaAutoStart then qeBananaStart() end
@@ -8018,6 +8158,12 @@ BananaSection:AddButton({
         controller:Start(dialogues.Spy)
     end)
 end)
+BananaSection:AddButton({
+    Title = "Pay Spy (Quantum)",
+    Description = "Invoca InfoLeviathan 2 pelo CommF_ do Quantum.",
+}, function()
+    qePaySpy()
+end)
 BananaSection:AddToggle("banana.autospy", {
     Title = "Auto Buy Spy (Banana)",
     Default = _G.QE_BananaAutoBuySpy,
@@ -8184,6 +8330,12 @@ QETab:AddToggle("qe.destroysolo", {
         qeDestroyResetDone = false
         SaveConfig()
     end,
+})
+QETab:AddToggle("qe.noeventequip", {
+    Title = "No Whitelist Event = No Equip",
+    Description = "Só pega arma na mão quando aparece um Sea Event da whitelist e você está fora do barco.",
+    Default = _G.QE_BananaNoEventNoEquip,
+    Callback = function(state) _G.QE_BananaNoEventNoEquip = state end,
 })
 QETab:AddSection("Hunt Team")
 local qePlayerValues = {}
