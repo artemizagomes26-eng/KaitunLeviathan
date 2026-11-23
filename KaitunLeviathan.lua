@@ -54,6 +54,10 @@ local Defaults = {
     AutoKen = false,
     AutoV3 = false,
     AutoV4 = false,
+    AimbotDragonstorm = false,
+    AimbotTargetType = "NPC",
+    SilentAim = true,
+    AttackAllSeaEvents = true,
     AutoSkills = true,
     RemoveFog = false,
     FPSBoost = false,
@@ -140,6 +144,18 @@ G.JumpPower = math.clamp(tonumber(G.JumpPower) or 50, 50, 90)
 G.FastAttackDelay = math.clamp(tonumber(G.FastAttackDelay) or 0.3, 0, 1)
 G.ScrollCraftAmount = math.clamp(math.floor(tonumber(G.ScrollCraftAmount) or 1), 1, 10)
 
+local SeaEventNames = {
+    SeaBeast = true,
+    Terrorshark = true,
+    Shark = true,
+    Piranha = true,
+    ["Fish Crew Member"] = true,
+    PirateBrigade = true,
+    PirateGrandBrigade = true,
+    FishBoat = true,
+    Leviathan = true,
+}
+
 local StatusText = "Ready"
 local StatusListeners = {}
 local SendNotify = function() end
@@ -180,9 +196,27 @@ local function getParts()
     return char, char:FindFirstChild("HumanoidRootPart"), char:FindFirstChildOfClass("Humanoid")
 end
 
+local StatSignals = setmetatable({}, { __mode = "k" })
+
+local function watchPlayerStats(hum)
+    if not hum or StatSignals[hum] then return end
+    local signals = {}
+    pcall(function()
+        signals[1] = hum:GetPropertyChangedSignal("WalkSpeed"):Connect(function()
+            if hum.Parent then pcall(function() hum.WalkSpeed = G.WalkSpeed end) end
+        end)
+        signals[2] = hum:GetPropertyChangedSignal("JumpPower"):Connect(function()
+            if hum.Parent then pcall(function() hum.JumpPower = G.JumpPower end) end
+        end)
+        StatSignals[hum] = signals
+    end)
+end
+
 local function applyPlayerStats()
     local _, _, hum = getParts()
-    if not hum or hum.SeatPart then return end
+    if not hum then return end
+    watchPlayerStats(hum)
+    if hum.SeatPart then return end
     pcall(function()
         if hum.WalkSpeed ~= G.WalkSpeed then hum.WalkSpeed = G.WalkSpeed end
         if hum.JumpPower ~= G.JumpPower then hum.JumpPower = G.JumpPower end
@@ -229,6 +263,32 @@ task.spawn(function()
     while true do
         pcall(applyBoatSpeed)
         task.wait(0.2)
+    end
+end)
+
+task.spawn(function()
+    while true do
+        task.wait(0.5)
+        refreshRemotes()
+        local char = LocalPlayer.Character
+        local hum = char and char:FindFirstChildOfClass("Humanoid")
+        if hum and hum.Health > 0 then
+            if G.AutoV3 and CommE then
+                pcall(function() CommE:FireServer("ActivateAbility") end)
+            end
+            if G.AutoV4 and LocalPlayer.Backpack then
+                local energy = char:FindFirstChild("RaceEnergy")
+                local transformed = char:FindFirstChild("RaceTransformed")
+                if energy and transformed and energy.Value >= 1 and not transformed.Value then
+                    local awakening = LocalPlayer.Backpack:FindFirstChild("Awakening")
+                        or char:FindFirstChild("Awakening")
+                    local rf = awakening and (awakening:FindFirstChild("RemoteFunction") or awakening.RemoteFunction)
+                    if rf then
+                        pcall(function() rf:InvokeServer({ true }) end)
+                    end
+                end
+            end
+        end
     end
 end)
 
@@ -511,6 +571,44 @@ local function modelRoot(model)
         or model:FindFirstChildWhichIsA("BasePart", true)
 end
 
+local AimHookInstalled = false
+local safeTypeof = (type(typeof) == "function" and typeof) or function(value) return type(value) end
+
+local function installAimHook()
+    if AimHookInstalled then return end
+    if type(getrawmetatable) ~= "function" or type(newcclosure) ~= "function"
+        or type(getnamecallmethod) ~= "function" or type(checkcaller) ~= "function" or type(setreadonly) ~= "function" then
+        return
+    end
+    local ok = pcall(function()
+        local mt = getrawmetatable(game)
+        local original = mt.__namecall
+        setreadonly(mt, false)
+        mt.__namecall = newcclosure(function(self, ...)
+            local args = table.pack(...)
+            local method = getnamecallmethod()
+            if not checkcaller() and G.SilentAim and (method == "FireServer" or method == "InvokeServer") then
+                local root = CombatTarget and CombatTarget.Parent and modelRoot(CombatTarget)
+                if root then
+                    for index = 1, math.min(6, args.n) do
+                        local value = args[index]
+                        if safeTypeof(value) == "Vector3" then
+                            args[index] = root.Position
+                            return original(self, table.unpack(args, 1, args.n))
+                        elseif safeTypeof(value) == "CFrame" then
+                            args[index] = CFrame.new(value.Position, root.Position)
+                            return original(self, table.unpack(args, 1, args.n))
+                        end
+                    end
+                end
+            end
+            return original(self, table.unpack(args, 1, args.n))
+        end)
+        setreadonly(mt, true)
+    end)
+    if ok then AimHookInstalled = true end
+end
+
 local function isAlive(model)
     if not model or not model.Parent then return false end
     local hum = model:FindFirstChildOfClass("Humanoid")
@@ -590,6 +688,33 @@ local function equipTooltip(tooltip)
     local _, _, hum = getParts()
     local tool = findToolByTooltip(tooltip)
     if tool and hum then pcall(function() hum:EquipTool(tool) end) end
+    return tool
+end
+
+local attackToolCursor = 0
+
+local function acquireAttackTool()
+    local char, _, hum = getParts()
+    local equipped = char and char:FindFirstChildOfClass("Tool")
+    local pool = {}
+    if LocalPlayer.Backpack then
+        for _, tool in ipairs(LocalPlayer.Backpack:GetChildren()) do
+            if tool:IsA("Tool") and (tool.ToolTip == "Melee" or tool.ToolTip == "Sword") then
+                pool[#pool + 1] = tool
+            end
+        end
+    end
+    if equipped and (equipped.ToolTip == "Melee" or equipped.ToolTip == "Sword") then
+        pool[#pool + 1] = equipped
+    end
+    if #pool == 0 then
+        return equipped or equipTooltip("Melee") or equipTooltip("Sword") or equipTooltip("Blox Fruit")
+    end
+    attackToolCursor = (attackToolCursor % #pool) + 1
+    local tool = pool[attackToolCursor]
+    if equipped ~= tool and hum then
+        pcall(function() hum:EquipTool(tool) end)
+    end
     return tool
 end
 
@@ -681,8 +806,11 @@ local function buildHitList(origin, range)
     if enemies then
         for _, model in ipairs(enemies:GetChildren()) do
             local isBoat = model:GetAttribute("IsBoat") == true
+            local isSeaEvent = G.AttackAllSeaEvents and SeaEventNames[model.Name] == true
             if isBoat then
                 if G.AttackBoats then addModel(model, "Boat") end
+            elseif isSeaEvent then
+                addModel(model, "SeaEvent")
             elseif G.AttackMobs then
                 addModel(model, "Mob")
             end
@@ -738,8 +866,7 @@ local function fastAttack()
     if not char or not hrp or not hum or hum.Health <= 0 then return end
     local tool = char:FindFirstChildOfClass("Tool")
     if not tool or tool.ToolTip == "Gun" then
-        tool = equipTooltip("Melee") or equipTooltip("Sword") or equipTooltip("Blox Fruit")
-        if not tool then return end
+        tool = acquireAttackTool()
     end
     local hits = buildHitList(hrp.Position, G.AttackRange)
     if #hits == 0 then CombatTarget = nil return end
@@ -812,26 +939,26 @@ local function fireDragonValidator()
     return ok
 end
 
+local function equipDragonstorm()
+    local char, _, hum = getParts()
+    if not char or not hum then return false end
+    local tool = char:FindFirstChildOfClass("Tool")
+    if tool and tool.Name == "Dragonstorm" then return true end
+    local dragon = LocalPlayer.Backpack and LocalPlayer.Backpack:FindFirstChild("Dragonstorm")
+    if not dragon then
+        if CommF then pcall(function() CommF:InvokeServer("CraftPrehistoricItem", "Dragonstorm") end) end
+        return false
+    end
+    pcall(function() hum:EquipTool(dragon) end)
+    return false
+end
+
 local function autoShootGun()
     refreshRemotes()
-    if not G.AutoShootGun then return end
+    if not G.AutoShootGun or G.AimbotDragonstorm then return end
     local char, hrp, hum = getParts()
     if not char or not hrp or not hum or hum.Health <= 0 then return end
-    local tool = char:FindFirstChildOfClass("Tool")
-    if not tool or tool.Name ~= "Dragonstorm" then
-        local dragon = nil
-        if LocalPlayer.Backpack then
-            for _, item in ipairs(LocalPlayer.Backpack:GetChildren()) do
-                if item.Name == "Dragonstorm" then dragon = item break end
-            end
-        end
-        if not dragon then
-            if CommF then pcall(function() CommF:InvokeServer("CraftPrehistoricItem", "Dragonstorm") end) end
-            return
-        end
-        pcall(function() hum:EquipTool(dragon) end)
-        return
-    end
+    if not equipDragonstorm() then return end
     local hits = buildHitList(hrp.Position, 900)
     if #hits == 0 then CombatTarget = nil return end
     local target = hits[1]
@@ -858,6 +985,54 @@ local function autoShootGun()
     end
     autoHaki()
 end
+
+local function aimbotTarget()
+    local _, hrp = getParts()
+    if not hrp then return nil end
+    if G.AimbotTargetType == "Player" then
+        local best, bestDist, bestChar = nil, nil, nil
+        for _, player in ipairs(Players:GetPlayers()) do
+            if player ~= LocalPlayer then
+                local char = player.Character
+                local root = char and (char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Head") or char.PrimaryPart)
+                if root and root.Parent then
+                    local dist = (root.Position - hrp.Position).Magnitude
+                    if not best or dist < bestDist then
+                        best, bestDist, bestChar = root, dist, char
+                    end
+                end
+            end
+        end
+        if best then return { model = bestChar, part = best, root = best } end
+    end
+    local hits = buildHitList(hrp.Position, 900)
+    return hits[1]
+end
+
+task.spawn(function()
+    while true do
+        task.wait(0.15)
+        if G.AimbotDragonstorm then
+            refreshRemotes()
+            local _, hrp, hum = getParts()
+            if hrp and hum and hum.Health > 0 and equipDragonstorm() then
+                local target = aimbotTarget()
+                if target then
+                    CombatTarget = target.model
+                    facePosition(target.root.Position)
+                    initDragonRuntime()
+                    if fireDragonValidator() and ShootGunEvent then
+                        pcall(function()
+                            ShootGunEvent:FireServer(target.root.Position, { target.part }, false, false, false, 0)
+                        end)
+                    end
+                else
+                    CombatTarget = nil
+                end
+            end
+        end
+    end
+end)
 
 local bribeCache, bribeCacheAt = nil, 0
 
@@ -1215,6 +1390,7 @@ local function startLoops()
     if not G.FullyLeviathan or Respawning then return end
     applyShiftLock()
     applyPlayerStats()
+    pcall(installAimHook)
     local _, _, startHum = getParts()
     if startHum then pcall(function() startHum.AutoRotate = false end) end
     LoopGeneration = LoopGeneration + 1
@@ -1538,6 +1714,10 @@ local function buildUI()
     slider(Combat, "combat.delay", "Fast Attack Delay", "FastAttackDelay", 0, 1)
     toggle(Combat, "combat.gun", "Auto Shoot Gun (Dragonstorm)", "AutoShootGun")
     dropdown(Combat, "combat.mode", "Dragonstorm Mode", "DragonstormMode", { "Spread Damage", "Single Damage" })
+    toggle(Combat, "combat.aimbot", "Dragonstorm Aimbot (silent shots)", "AimbotDragonstorm")
+    dropdown(Combat, "combat.aimtarget", "Aimbot Target", "AimbotTargetType", { "NPC", "Player" })
+    toggle(Combat, "combat.silent", "Silent Aim (fix backwards)", "SilentAim")
+    toggle(Combat, "combat.seaevents", "M1 All Sea Events", "AttackAllSeaEvents")
     toggle(Combat, "combat.mobs", "Attack NPCs", "AttackMobs")
     toggle(Combat, "combat.players", "Attack Players", "AttackPlayers")
     toggle(Combat, "combat.seabeasts", "Attack Sea Beasts", "AttackSeaBeasts")
