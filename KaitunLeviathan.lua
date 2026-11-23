@@ -7332,6 +7332,34 @@ task.spawn(function()
     end
 end)
 
+local qeDragonAngles = { 0, 10, -10, 20, -20, 30, -30, 40 }
+
+local function qeFireDragon(pos, part, angle)
+    if not shootFunc or type(idx) ~= "table" or not idx.u20 or not Validator2 or not ShootGunEvent then
+        return false
+    end
+    return pcall(function()
+        local u20 = debug.getupvalue(shootFunc, idx.u20)
+        local u21 = debug.getupvalue(shootFunc, idx.u21)
+        local u22 = debug.getupvalue(shootFunc, idx.u22)
+        local u23 = debug.getupvalue(shootFunc, idx.u23)
+        local u24 = debug.getupvalue(shootFunc, idx.u24)
+        local u25 = debug.getupvalue(shootFunc, idx.u25)
+        local u26 = debug.getupvalue(shootFunc, idx.u26)
+        local u79 = u25 * u21
+        local u80 = (u24 * u21 + u25 * u20) % u22
+        u80 = (u80 * u22 + u79) % u23
+        u24 = math.floor(u80 / u22)
+        u25 = u80 - u24 * u22
+        u26 = u26 + 1
+        debug.setupvalue(shootFunc, idx.u24, u24)
+        debug.setupvalue(shootFunc, idx.u25, u25)
+        debug.setupvalue(shootFunc, idx.u26, u26)
+        Validator2:FireServer(math.floor(u80 / u23 * 16777215), u26)
+        ShootGunEvent:FireServer(pos, { part }, false, false, false, angle or 0)
+    end)
+end
+
 task.spawn(function()
     while true do
         task.wait(0.2)
@@ -7349,25 +7377,38 @@ task.spawn(function()
             end
             local _, hrp, hum = qeParts()
             if hrp and hum and hum.Health > 0 and ShootGunEvent and Validator2 and qeEquipDragonstorm() then
-                local target = nil
-                if _G.QE_AimPlayer then target = qePlayerTarget() end
-                if not target and _G.QE_AimNPC then
+                local hits = {}
+                if _G.QE_AimPlayer then
+                    local p = qePlayerTarget()
+                    if p then table.insert(hits, p) end
+                end
+                if _G.QE_AimNPC then
                     local lvModel, lvPart = SeaAPI.Leviathan_Find()
                     if lvModel then
                         local root = lvPart or qeModelRoot(lvModel)
                         if root then
-                            target = { model = lvModel, part = lvPart or root, root = root }
+                            table.insert(hits, 1, { model = lvModel, part = lvPart or root, root = root })
                         end
                     end
-                    if not target then
-                        local hits = qeCollectTargets(hrp.Position, 900, false)
-                        target = hits[1]
+                    if #hits == 0 then
+                        for _, h in ipairs(qeCollectTargets(hrp.Position, 900, false)) do
+                            table.insert(hits, h)
+                        end
                     end
                 end
-                if target then
-                    qeAimTarget = target.model
-                    qeFace(target.root.Position)
-                    pcall(function() fireShot(target.root.Position, target.part) end)
+                if #hits > 0 then
+                    qeAimTarget = hits[1].model
+                    qeFace(hits[1].root.Position)
+                    if #hits == 1 then
+                        for _, angle in ipairs({ 0, 10, -10 }) do
+                            qeFireDragon(hits[1].root.Position, hits[1].part, angle)
+                        end
+                    else
+                        for i, h in ipairs(hits) do
+                            if i > #qeDragonAngles then break end
+                            qeFireDragon(h.root.Position, h.part, qeDragonAngles[i])
+                        end
+                    end
                 else
                     qeAimTarget = nil
                 end
