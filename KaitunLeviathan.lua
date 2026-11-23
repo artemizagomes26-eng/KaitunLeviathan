@@ -7048,6 +7048,7 @@ local function qeAlive(model)
 end
 
 local function qeFace(position)
+    if os.clock() < (tonumber(_G.QE_SuppressFacingUntil) or 0) then return end
     local _, hrp, hum = qeParts()
     if not hrp or not position then return end
     local flat = Vector3.new(position.X - hrp.Position.X, 0, position.Z - hrp.Position.Z)
@@ -7062,17 +7063,23 @@ local qeFacingReleaseUntil = 0
 
 local function qeReleaseFacing()
     if type(_G.QE_BananaCancelTween) == "function" then pcall(_G.QE_BananaCancelTween) end
-    local _, hrp, hum = qeParts()
-    if not hrp or not hum then return end
-    local camera = workspace.CurrentCamera
-    if not camera then return end
-    local look = camera.CFrame.LookVector
-    local flat = Vector3.new(look.X, 0, look.Z)
-    if flat.Magnitude < 0.01 then return end
-    qeFacingReleaseUntil = os.clock() + 1.5
-    pcall(function()
-        hum.AutoRotate = true
-        hrp.CFrame = CFrame.lookAt(hrp.Position, hrp.Position + flat)
+    _G.QE_SuppressFacingUntil = os.clock() + 3
+    pcall(Unseat)
+    task.spawn(function()
+        task.wait(0.12)
+        local _, hrp, hum = qeParts()
+        local camera = workspace.CurrentCamera
+        if not hrp or not hum or not camera then return end
+        local look = camera.CFrame.LookVector
+        local flat = Vector3.new(look.X, 0, look.Z)
+        if flat.Magnitude < 0.01 then return end
+        qeFacingReleaseUntil = os.clock() + 3
+        pcall(function()
+            hum.AutoRotate = true
+            hrp.CFrame = CFrame.new(hrp.Position, hrp.Position + flat)
+            hrp.AssemblyLinearVelocity = Vector3.zero
+            hrp.AssemblyAngularVelocity = Vector3.zero
+        end)
     end)
 end
 
@@ -7082,7 +7089,7 @@ task.spawn(function()
         if qeFacingReleaseUntil > os.clock() then
             local _, hrp, hum = qeParts()
             local camera = workspace.CurrentCamera
-            if hrp and hum and camera and not _G.QE_FastAttack and not _G.QE_AutoGun then
+            if hrp and hum and camera then
                 local look = camera.CFrame.LookVector
                 local flat = Vector3.new(look.X, 0, look.Z)
                 if flat.Magnitude > 0.01 then
@@ -7605,62 +7612,89 @@ end
 
 local qeBananaTweenState = nil
 
+local function qeBananaSetBoatCollide(boat, enabled)
+    if not boat then return end
+    pcall(function()
+        for _, part in ipairs(boat:GetDescendants()) do
+            if part:IsA("BasePart") then part.CanCollide = enabled end
+        end
+    end)
+end
+
 local function qeBananaCancelTween()
     if qeBananaTweenState then
         qeBananaTweenState.cancelled = true
+        if qeBananaTweenState.boat then
+            pcall(qeBananaSetBoatCollide, qeBananaTweenState.boat, true)
+        end
         qeBananaTweenState = nil
     end
 end
 _G.QE_BananaCancelTween = qeBananaCancelTween
 
-local function qeBananaTweenSeat(seat, target)
-    if not seat or not target then return false end
+local function qeBananaTweenSeat(seat, target, speed)
+    if not seat or not target or not seat.Parent then return false end
     if qeBananaTweenState and qeBananaTweenState.seat == seat
         and qeBananaTweenState.target and (qeBananaTweenState.target.Position - target.Position).Magnitude < 50 then
         return true
     end
+    local hum = qeLocal.Character and qeLocal.Character:FindFirstChildOfClass("Humanoid")
+    if not hum or hum.SeatPart ~= seat then return false end
     qeBananaCancelTween()
-    local speedSetting = math.max(tonumber(_G.QE_BananaBoatSpeed) or 140, 30)
+    local boat = seat:FindFirstAncestorOfClass("Model") or seat.Parent
+    local speedSetting = math.max(tonumber(speed) or tonumber(_G.QE_BananaBoatSpeed) or 140, 30)
+    qeBananaSetBoatCollide(boat, false)
     local state = {
         seat = seat,
+        boat = boat,
         target = target,
         speed = speedSetting,
         cap = speedSetting,
+        ceiling = speedSetting,
         current = seat.CFrame,
-        paused = false,
+        nextRaise = 0,
         cancelled = false,
     }
     qeBananaTweenState = state
     task.spawn(function()
+        local function finish()
+            pcall(qeBananaSetBoatCollide, boat, true)
+            if qeBananaTweenState == state then qeBananaTweenState = nil end
+        end
         while not state.cancelled and seat.Parent do
             local dt = RunService.Heartbeat:Wait()
-            if not state.paused then
-                local hum = qeLocal.Character and qeLocal.Character:FindFirstChildOfClass("Humanoid")
-                if not hum or hum.SeatPart ~= seat then break end
-                local remaining = (state.target.Position - state.current.Position).Magnitude
-                local step = math.min(state.speed, state.cap) * dt
-                if remaining <= math.max(15, step) then
-                    pcall(function()
-                        seat.CFrame = state.target
-                        seat.AssemblyLinearVelocity = Vector3.zero
-                        seat.AssemblyAngularVelocity = Vector3.zero
-                    end)
-                    if qeBananaTweenState == state then qeBananaTweenState = nil end
-                    break
-                end
-                if remaining > math.max(200, step * 4) then
-                    state.cap = math.max(state.speed * 0.65, 40)
-                elseif state.cap < state.speed then
-                    state.cap = math.min(state.cap * 1.02, state.speed)
-                end
-                state.current = state.current:Lerp(state.target, step / remaining)
+            local currentHum = qeLocal.Character and qeLocal.Character:FindFirstChildOfClass("Humanoid")
+            if not currentHum or currentHum.SeatPart ~= seat then break end
+            local remaining = (state.target.Position - state.current.Position).Magnitude
+            local step = math.min(state.speed, state.cap) * dt
+            if (seat.Position - state.current.Position).Magnitude > math.max(20, step * 3) then
+                state.ceiling = state.speed * 0.9
+                state.cap = math.max(state.speed * 0.7, 40)
+                state.nextRaise = os.clock() + 1.5
+                state.current = seat.CFrame
+                remaining = (state.target.Position - state.current.Position).Magnitude
+                step = math.min(state.speed, state.cap) * dt
+            elseif step > 5 and state.cap <= state.speed and state.cap < state.ceiling and os.clock() >= state.nextRaise then
+                state.cap = math.min(state.cap * 1.08, state.ceiling)
+                state.nextRaise = os.clock() + 0.5
+            end
+            if remaining <= math.max(5, step) then
                 pcall(function()
-                    seat.CFrame = state.current
+                    seat.CFrame = state.target
                     seat.AssemblyLinearVelocity = Vector3.zero
                     seat.AssemblyAngularVelocity = Vector3.zero
                 end)
+                finish()
+                break
             end
+            state.current = state.current:Lerp(state.target, step / remaining)
+            pcall(function()
+                seat.CFrame = state.current
+                seat.AssemblyLinearVelocity = Vector3.zero
+                seat.AssemblyAngularVelocity = Vector3.zero
+            end)
         end
+        finish()
     end)
     return true
 end
@@ -7894,6 +7928,35 @@ end)
 
 local qeDestroyPhase = "idle"
 local qeDestroyResetDone = false
+local qeDestroyHeartSeen = false
+local qeDestroyUnlocked = false
+
+local function qeDestroyUnlockReady()
+    if qeDestroyUnlocked then return true end
+    local map = workspace:FindFirstChild("Map")
+    local heart = map and map:FindFirstChild("FrozenHeart")
+    if heart then
+        qeDestroyHeartSeen = true
+        local pos = GetHeartPos(heart)
+        if pos and pos.Y < 110 then
+            qeDestroyUnlocked = true
+            return true
+        end
+        local inside = heart:FindFirstChild("Inside")
+        if inside and inside:GetAttribute("Harpooned") then
+            qeDestroyUnlocked = true
+            return true
+        end
+    elseif qeDestroyHeartSeen then
+        qeDestroyUnlocked = true
+        return true
+    end
+    if qeBananaFrozenDimension() then
+        qeDestroyUnlocked = true
+        return true
+    end
+    return false
+end
 
 task.spawn(function()
     while true do
@@ -7902,6 +7965,11 @@ task.spawn(function()
             qeDestroyPhase = "idle"
         else
             pcall(function()
+                if not qeDestroyUnlockReady() then
+                    qeDestroyPhase = "locked"
+                    SetStatus("Auto Destroy: waiting for Frozen Heart or frozen Hydra")
+                    return
+                end
                 local status = qeBribeStatus()
                 local map = workspace:FindFirstChild("Map")
                 local heart = map and map:FindFirstChild("FrozenHeart")
@@ -8280,7 +8348,7 @@ QETab:AddToggle("qe.noequip", {
 })
 QETab:AddToggle("qe.destroy", {
     Title = "Auto Destroy Idk",
-    Description = "After Leviathan: rebuy boat, farm whitelisted Sea Events until cooldown ends, reset, wait for whitelisted players, pay Spy, repeat.",
+    Description = "Starts only after the Frozen Heart is collected or Hydra is frozen. Then rebuy boat, farm whitelisted Sea Events, reset, wait for players, pay Spy, repeat.",
     Default = _G.QE_AutoDestroyIdk,
     Callback = function(state)
         _G.QE_AutoDestroyIdk = state
@@ -8292,7 +8360,7 @@ QETab:AddToggle("qe.destroy", {
 })
 QETab:AddToggle("qe.destroysolo", {
     Title = "Auto Destroy Idk (solo)",
-    Description = "Same as Auto Destroy, but farms Sea Events solo and skips waiting for whitelisted players.",
+    Description = "Starts only after the Frozen Heart is collected or Hydra is frozen. Farms Sea Events solo and skips waiting for players.",
     Default = _G.QE_AutoDestroySolo,
     Callback = function(state)
         _G.QE_AutoDestroySolo = state
