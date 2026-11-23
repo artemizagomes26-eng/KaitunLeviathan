@@ -7039,10 +7039,17 @@ end
 local qeChosenWeapon = nil
 local qeLastWeaponEquip = 0
 local qeLastWeaponTool = nil
+local qeWeaponChar = nil
 
 local function qeEquipWeapon()
     local char, _, hum = qeParts()
     if not char or not hum then return false end
+    if qeWeaponChar ~= char then
+        qeWeaponChar = char
+        qeManualUnequip.weapon = false
+        qeLastWeaponTool = nil
+        qeChosenWeapon = nil
+    end
     if _G.QE_NoAutoEquip then return true end
     local order = {}
     if _G.QE_Weapon == "Melee" then
@@ -7067,7 +7074,7 @@ local function qeEquipWeapon()
         end
         return true
     end
-    if qeLastWeaponTool and (not equipped or equipped.Name ~= qeLastWeaponTool) then
+    if qeLastWeaponTool and not equipped then
         qeManualUnequip.weapon = true
         qeLastWeaponTool = nil
         return true
@@ -7104,10 +7111,16 @@ end
 local qeLastGunCraft = 0
 local qeLastGunEquip = 0
 local qeLastGunTool = nil
+local qeGunChar = nil
 
 local function qeEquipDragonstorm()
     local char, _, hum = qeParts()
     if not char or not hum then return false end
+    if qeGunChar ~= char then
+        qeGunChar = char
+        qeManualUnequip.gun = false
+        qeLastGunTool = nil
+    end
     local equipped = char:FindFirstChildOfClass("Tool")
     local isGun = function(tool)
         return tool and (tool.ToolTip == "Gun" or tool.Name == "Dragonstorm")
@@ -7119,7 +7132,7 @@ local function qeEquipDragonstorm()
         end
         return false
     end
-    if qeLastGunTool and (not equipped or equipped.Name ~= qeLastGunTool) then
+    if qeLastGunTool and not equipped then
         qeManualUnequip.gun = true
         qeLastGunTool = nil
         return false
