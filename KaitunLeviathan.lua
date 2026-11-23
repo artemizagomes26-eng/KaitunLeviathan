@@ -45,6 +45,7 @@ local Defaults = {
     BribeSpy = true,
     AutoSailBackTiki = true,
     HuntPartner = "",
+    HuntPartners = {},
     WalkOnWater = false,
     WaterLevel = 2,
     ForceShiftLock = true,
@@ -58,6 +59,7 @@ local Defaults = {
     FPSBoost = false,
     AttackRange = 500,
     BoatSpeed = 220,
+    ManualBoatSpeed = 220,
     WalkSpeed = 50,
     JumpPower = 50,
     AttackMobs = true,
@@ -121,7 +123,16 @@ end
 
 loadConfig()
 
+if type(G.HuntPartners) ~= "table" then
+    local oldPartner = G.HuntPartner
+    G.HuntPartners = {}
+    if type(oldPartner) == "string" and oldPartner ~= "" and oldPartner ~= "None" then
+        G.HuntPartners[1] = oldPartner
+    end
+end
+
 G.BoatSpeed = math.clamp(tonumber(G.BoatSpeed) or 220, 50, 400)
+G.ManualBoatSpeed = math.clamp(tonumber(G.ManualBoatSpeed) or G.BoatSpeed, 50, 400)
 G.AttackRange = math.clamp(tonumber(G.AttackRange) or 500, 100, 1500)
 G.WaterLevel = math.clamp(tonumber(G.WaterLevel) or 2, -100, 500)
 G.WalkSpeed = math.clamp(tonumber(G.WalkSpeed) or 50, 50, 200)
@@ -180,22 +191,27 @@ end
 
 local function applyBoatSpeed()
     local _, _, hum = getParts()
-    if hum and hum.SeatPart and hum.SeatPart:IsA("VehicleSeat") then
+    if not hum or (not hum.Sit and not hum.SeatPart) then return end
+    local speed = math.clamp(tonumber(G.ManualBoatSpeed) or G.BoatSpeed or 220, 50, 400)
+    local seat = hum.SeatPart
+    if seat and seat:IsA("VehicleSeat") then
         pcall(function()
-            hum.SeatPart.MaxSpeed = G.BoatSpeed
-            hum.SeatPart.Torque = 0.2
-            hum.SeatPart.TurnSpeed = 5
+            seat.MaxSpeed = speed
+            seat.Torque = 0.2
+            seat.TurnSpeed = 5
         end)
+        return
     end
     local boats = workspace:FindFirstChild("Boats")
     if boats then
         for _, boat in ipairs(boats:GetChildren()) do
-            local seat = boat:FindFirstChildWhichIsA("VehicleSeat", true)
-            if seat then
+            local vehicleSeat = boat:FindFirstChildWhichIsA("VehicleSeat", true)
+                or boat:FindFirstChild("VehicleSeat")
+            if vehicleSeat then
                 pcall(function()
-                    seat.MaxSpeed = G.BoatSpeed
-                    seat.Torque = 0.2
-                    seat.TurnSpeed = 5
+                    vehicleSeat.MaxSpeed = speed
+                    vehicleSeat.Torque = 0.2
+                    vehicleSeat.TurnSpeed = 5
                 end)
             end
         end
@@ -205,8 +221,14 @@ end
 task.spawn(function()
     while true do
         pcall(applyPlayerStats)
-        pcall(applyBoatSpeed)
         task.wait(0.35)
+    end
+end)
+
+task.spawn(function()
+    while true do
+        pcall(applyBoatSpeed)
+        task.wait(0.2)
     end
 end)
 
@@ -1045,11 +1067,35 @@ local function fightLeviathan()
     return true
 end
 
+local function partnerNames()
+    local names = {}
+    if type(G.HuntPartners) == "table" then
+        for _, name in ipairs(G.HuntPartners) do
+            if type(name) == "string" and name ~= "" and name ~= "None" then
+                names[#names + 1] = name
+            end
+        end
+    end
+    return names
+end
+
 local function getPartnerRoot()
-    if not G.HuntPartner or G.HuntPartner == "" or G.HuntPartner == "None" then return nil end
-    local partner = Players:FindFirstChild(G.HuntPartner)
-    local char = partner and partner.Character
-    return char and (char:FindFirstChild("HumanoidRootPart") or char.PrimaryPart) or nil
+    local names = partnerNames()
+    if #names == 0 then return nil end
+    local _, myRoot = getParts()
+    local best, bestDist = nil, nil
+    for _, name in ipairs(names) do
+        local partner = Players:FindFirstChild(name)
+        local char = partner and partner.Character
+        local root = char and (char:FindFirstChild("HumanoidRootPart") or char.PrimaryPart)
+        if root and root.Parent then
+            local dist = myRoot and (root.Position - myRoot.Position).Magnitude or 0
+            if not best or dist < bestDist then
+                best, bestDist = root, dist
+            end
+        end
+    end
+    return best
 end
 
 local function findBoatAndSail()
@@ -1074,7 +1120,7 @@ local function findBoatAndSail()
         if partnerRoot then
             local partnerDist = (partnerRoot.Position - hrp.Position).Magnitude
             if partnerDist <= 120 then
-                setStatus("Waiting for partner: " .. tostring(G.HuntPartner))
+                setStatus("Waiting for partner: " .. table.concat(partnerNames(), ", "))
                 task.wait(0.5)
                 waitingForPartner = true
             else
@@ -1088,7 +1134,7 @@ local function findBoatAndSail()
             end
             local flat = Vector3.new(target.Position.X - hrp.Position.X, 0, target.Position.Z - hrp.Position.Z)
             if flat.Magnitude > 0 then
-                local step = math.min(flat.Magnitude, (G.BoatSpeed or 220) * (1 / 60))
+                local step = math.min(flat.Magnitude, (G.BoatSpeed or 220) / 60)
                 local np = hrp.Position + flat.Unit * step
                 local y = G.WalkOnWater and math.max(hrp.Position.Y, 8) or 120
                 local lookTarget = Vector3.new(target.Position.X, y, target.Position.Z)
@@ -1098,6 +1144,7 @@ local function findBoatAndSail()
                 end)
             end
         end
+        task.wait(1 / 60)
     end
     return false
 end
@@ -1405,10 +1452,20 @@ local function buildUI()
     local Main = Window:AddTab({ Title = "Home", Icon = "home" })
     local Hunt = Window:AddTab({ Title = "Sea Event", Icon = "ship" })
     local Player = Window:AddTab({ Title = "Player", Icon = "user" })
-    local Combat = Window:AddTab({ Title = "Combat", Icon = "swords" })
-    local Boat = Window:AddTab({ Title = "Boat", Icon = "anchor" })
+    local Combat = Window:AddTab({ Title = "Dragon Update", Icon = "swords" })
+    local Boat = Window:AddTab({ Title = "Travel", Icon = "anchor" })
     local Scrolls = Window:AddTab({ Title = "Scroll Crafting & Trade", Icon = "scroll" })
     local Web = Window:AddTab({ Title = "Webhook", Icon = "link" })
+
+    pcall(function()
+        Main:AddSection("Status")
+        Hunt:AddSection("Leviathan Hunt")
+        Player:AddSection("Speed & Jump")
+        Combat:AddSection("Quantum Attack")
+        Boat:AddSection("Boat Controller")
+        Scrolls:AddSection("Scroll Crafting & Trade")
+        Web:AddSection("Webhook")
+    end)
 
     toggle(Main, "main.enabled", "Fully Leviathan", "FullyLeviathan", function(state)
         if state then
@@ -1435,27 +1492,28 @@ local function buildUI()
     toggle(Hunt, "hunt.bribe", "Bribe the Spy", "BribeSpy")
     toggle(Hunt, "hunt.sailback", "Auto Sail Back to Tiki", "AutoSailBackTiki")
 
-    local partnerValues = { "None" }
-    for _, player in ipairs(Players:GetPlayers()) do
-        if player ~= LocalPlayer then partnerValues[#partnerValues + 1] = player.Name end
+    local function buildPartnerValues()
+        local values = {}
+        for _, player in ipairs(Players:GetPlayers()) do
+            if player ~= LocalPlayer then values[#values + 1] = player.Name end
+        end
+        return values
     end
-    local partnerDropdown = Hunt:AddDropdown("hunt.partner", {
-        Title = "Hunt With Player",
-        Values = partnerValues,
-        Default = G.HuntPartner ~= "" and G.HuntPartner or "None",
-        Multi = false,
-        Callback = function(value)
-            G.HuntPartner = value == "None" and "" or value
+    local partnerDropdown = Hunt:AddDropdown("hunt.partners", {
+        Title = "Hunt With Players (multi)",
+        Values = buildPartnerValues(),
+        Default = partnerNames(),
+        Multi = true,
+        Callback = function(values)
+            G.HuntPartners = type(values) == "table" and values or {}
+            G.HuntPartner = G.HuntPartners[1] or ""
             saveConfig()
         end,
     })
     Hunt:AddButton({
         Title = "Refresh Player List",
         Callback = function()
-            local values = { "None" }
-            for _, player in ipairs(Players:GetPlayers()) do
-                if player ~= LocalPlayer then values[#values + 1] = player.Name end
-            end
+            local values = buildPartnerValues()
             pcall(function()
                 partnerDropdown.Values = values
                 if partnerDropdown.Refresh then partnerDropdown:Refresh(values) end
@@ -1491,7 +1549,12 @@ local function buildUI()
     toggle(Combat, "combat.skills", "Auto Skills", "AutoSkills")
     slider(Combat, "combat.range", "Attack Range", "AttackRange", 100, 1500)
 
-    slider(Boat, "boat.speed", "Boat Speed (max 400)", "BoatSpeed", 50, 400, function()
+    slider(Boat, "boat.speed", "Boat Speed (max 400)", "BoatSpeed", 50, 400, function(value)
+        G.ManualBoatSpeed = math.clamp(tonumber(value) or 220, 50, 400)
+        applyBoatSpeed()
+    end)
+    slider(Boat, "boat.manualspeed", "Manual Boat Speed", "ManualBoatSpeed", 50, 400, function(value)
+        G.BoatSpeed = math.clamp(tonumber(value) or 220, 50, 400)
         applyBoatSpeed()
     end)
     toggle(Boat, "boat.water", "Walk on Water", "WalkOnWater")
