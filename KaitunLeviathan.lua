@@ -46,6 +46,9 @@ local Defaults = {
     AutoSailBackTiki = true,
     HuntPartner = "",
     WalkOnWater = false,
+    WaterLevel = 2,
+    ForceShiftLock = true,
+    ShowIcon = true,
     AutoHaki = true,
     AutoKen = false,
     AutoV3 = false,
@@ -111,6 +114,7 @@ loadConfig()
 
 G.BoatSpeed = math.clamp(tonumber(G.BoatSpeed) or 220, 50, 400)
 G.AttackRange = math.clamp(tonumber(G.AttackRange) or 500, 100, 1500)
+G.WaterLevel = math.clamp(tonumber(G.WaterLevel) or 2, -100, 500)
 
 local StatusText = "Ready"
 local StatusListeners = {}
@@ -329,9 +333,9 @@ RunService.Heartbeat:Connect(function(dt)
             waterPart.Parent = workspace
         end
         pcall(function()
-            waterPart.CFrame = CFrame.new(wHrp.Position.X, wHrp.Position.Y - 3.5, wHrp.Position.Z)
-            if wHrp.Position.Y < 4 then
-                wHrp.CFrame = CFrame.new(wHrp.Position.X, 4, wHrp.Position.Z)
+            waterPart.CFrame = CFrame.new(wHrp.Position.X, G.WaterLevel, wHrp.Position.Z)
+            if wHrp.Position.Y < G.WaterLevel + 1 then
+                wHrp.CFrame = CFrame.new(wHrp.Position.X, G.WaterLevel + 3.5, wHrp.Position.Z)
                     * (wHrp.CFrame - wHrp.CFrame.Position)
             end
         end)
@@ -373,6 +377,19 @@ RunService.Heartbeat:Connect(function(dt)
         hrp.CFrame = goal
     else
         hrp.CFrame = hrp.CFrame:Lerp(goal, math.min(dist, 280 * (dt or 1 / 60)) / dist)
+    end
+    if AttackTarget and AttackTarget.Parent then
+        local targetRoot = AttackTarget:FindFirstChild("HumanoidRootPart") or AttackTarget.PrimaryPart
+            or AttackTarget:FindFirstChild("Head") or AttackTarget:FindFirstChildWhichIsA("BasePart", true)
+        if targetRoot then
+            local flat = Vector3.new(targetRoot.Position.X - hrp.Position.X, 0, targetRoot.Position.Z - hrp.Position.Z)
+            if flat.Magnitude > 0.5 then
+                pcall(function()
+                    if hum then hum.AutoRotate = false end
+                    hrp.CFrame = CFrame.lookAt(hrp.Position, hrp.Position + flat.Unit)
+                end)
+            end
+        end
     end
 end)
 
@@ -941,8 +958,9 @@ local function findBoatAndSail()
                 local step = math.min(flat.Magnitude, (G.BoatSpeed or 220) * (1 / 60))
                 local np = hrp.Position + flat.Unit * step
                 local y = G.WalkOnWater and math.max(hrp.Position.Y, 8) or 120
+                local lookTarget = Vector3.new(target.Position.X, y, target.Position.Z)
                 pcall(function()
-                    hrp.CFrame = CFrame.lookAt(Vector3.new(np.X, y, np.Z), Vector3.new(np.X, y, np.Z - 1))
+                    hrp.CFrame = CFrame.lookAt(Vector3.new(np.X, y, np.Z), lookTarget)
                     hrp.AssemblyLinearVelocity = Vector3.zero
                 end)
             end
@@ -994,8 +1012,28 @@ local function mainLeviathanLoop(generation)
     end
 end
 
+local OriginalMouseBehavior = nil
+
+local function applyShiftLock()
+    if not G.ForceShiftLock then return end
+    if UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled then return end
+    pcall(function()
+        if not OriginalMouseBehavior then
+            OriginalMouseBehavior = UserInputService.MouseBehavior
+        end
+        UserInputService.MouseBehavior = Enum.MouseBehavior.LockCenter
+    end)
+end
+
+local function restoreMouseBehavior()
+    if not OriginalMouseBehavior then return end
+    pcall(function() UserInputService.MouseBehavior = OriginalMouseBehavior end)
+    OriginalMouseBehavior = nil
+end
+
 local function startLoops()
     if not G.FullyLeviathan or Respawning then return end
+    applyShiftLock()
     LoopGeneration = LoopGeneration + 1
     local generation = LoopGeneration
     task.spawn(function() mainLeviathanLoop(generation) end)
@@ -1027,6 +1065,7 @@ local function stopLoops()
     AttackTarget, AttackStand = nil, nil
     local _, _, hum = getParts()
     if hum then pcall(function() hum.AutoRotate = true end) end
+    restoreMouseBehavior()
 end
 
 local function onDeath()
@@ -1034,6 +1073,7 @@ local function onDeath()
     stopTween()
     clearHover()
     AttackTarget, AttackStand = nil, nil
+    restoreMouseBehavior()
     setStatus("Respawning - toggle stays enabled")
 end
 
@@ -1225,6 +1265,10 @@ local function buildUI()
         end
     end)
     toggle(Main, "main.status", "Show status overlay", "ShowStatus")
+    toggle(Main, "main.icon", "Show floating icon", "ShowIcon")
+    toggle(Main, "main.shiftlock", "Force ShiftLock (aim fix)", "ForceShiftLock", function(state)
+        if state then applyShiftLock() else restoreMouseBehavior() end
+    end)
     toggle(Main, "main.fog", "Remove Fog", "RemoveFog")
     toggle(Main, "main.fps", "FPS Boost", "FPSBoost")
     Main:AddButton({
@@ -1291,6 +1335,7 @@ local function buildUI()
 
     slider(Boat, "boat.speed", "Boat Speed (max 400)", "BoatSpeed", 50, 400)
     toggle(Boat, "boat.water", "Walk on Water", "WalkOnWater")
+    slider(Boat, "boat.waterlevel", "Water Level", "WaterLevel", -100, 500)
 
     toggle(Web, "web.enabled", "Webhook Enabled", "WebhookEnabled")
     input(Web, "web.url", "Webhook URL", "WebhookURL")
@@ -1305,6 +1350,116 @@ task.spawn(function()
     if not ok then
         warn("[Quantum Kaitun] UI failed: " .. tostring(err))
         notify("Quantum Kaitun", "UI failed: " .. tostring(err))
+    end
+end)
+
+local IconGui = nil
+local IconConnections = {}
+
+local function destroyIcon()
+    for _, connection in ipairs(IconConnections) do
+        pcall(function() connection:Disconnect() end)
+    end
+    table.clear(IconConnections)
+    if IconGui then
+        pcall(function() IconGui:Destroy() end)
+        IconGui = nil
+    end
+end
+
+local function createIcon()
+    if IconGui then return end
+    IconGui = Instance.new("ScreenGui")
+    IconGui.Name = "QuantumKaitunIcon"
+    IconGui.ResetOnSpawn = false
+    IconGui.IgnoreGuiInset = true
+    IconGui.DisplayOrder = 999
+
+    local button = Instance.new("TextButton")
+    button.Name = "Icon"
+    button.Size = UDim2.fromOffset(50, 50)
+    button.Position = UDim2.fromOffset(14, 180)
+    button.BackgroundColor3 = Color3.fromRGB(18, 18, 24)
+    button.BackgroundTransparency = 0.05
+    button.AutoButtonColor = false
+    button.Text = "QK"
+    button.Font = Enum.Font.GothamBold
+    button.TextSize = 15
+    button.TextColor3 = Color3.fromRGB(235, 245, 255)
+    button.Parent = IconGui
+
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(1, 0)
+    corner.Parent = button
+
+    local stroke = Instance.new("UIStroke")
+    stroke.Thickness = 1.5
+    stroke.Color = Color3.fromRGB(96, 205, 255)
+    stroke.Transparency = 0.2
+    stroke.Parent = button
+
+    local parentOk = pcall(function()
+        IconGui.Parent = (gethui and gethui()) or game:GetService("CoreGui")
+    end)
+    if not parentOk or not IconGui.Parent then
+        IconGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
+    end
+
+    local dragging, moved, last, travelled = false, false, nil, 0
+    IconConnections[#IconConnections + 1] = button.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = true
+            moved = false
+            last = nil
+            travelled = 0
+        end
+    end)
+    IconConnections[#IconConnections + 1] = UserInputService.InputChanged:Connect(function(input)
+        if not dragging then return end
+        if input.UserInputType ~= Enum.UserInputType.MouseMovement and input.UserInputType ~= Enum.UserInputType.Touch then
+            return
+        end
+        local now = Vector2.new(input.Position.X, input.Position.Y)
+        local step = last and (now - last) or Vector2.zero
+        last = now
+        travelled = travelled + step.Magnitude
+        if travelled > 5 then moved = true end
+        if step.Magnitude > 0 then
+            local screen = IconGui.AbsoluteSize
+            if screen.X <= 0 or screen.Y <= 0 then
+                screen = workspace.CurrentCamera.ViewportSize
+            end
+            local size = button.AbsoluteSize
+            local pos = button.Position
+            local x = pos.X.Scale * screen.X + pos.X.Offset + step.X
+            local y = pos.Y.Scale * screen.Y + pos.Y.Offset + step.Y
+            button.Position = UDim2.fromOffset(
+                math.clamp(x, 0, math.max(0, screen.X - size.X)),
+                math.clamp(y, 0, math.max(0, screen.Y - size.Y))
+            )
+        end
+    end)
+    IconConnections[#IconConnections + 1] = UserInputService.InputEnded:Connect(function(input)
+        if not dragging then return end
+        if input.UserInputType ~= Enum.UserInputType.MouseButton1 and input.UserInputType ~= Enum.UserInputType.Touch then
+            return
+        end
+        dragging = false
+        if moved then return end
+        if Window and Window.Root then
+            Window.Root.Visible = not Window.Root.Visible
+        end
+    end)
+end
+
+task.spawn(function()
+    while true do
+        if G.ShowIcon and not IconGui then
+            pcall(createIcon)
+        elseif not G.ShowIcon and IconGui then
+            destroyIcon()
+        end
+        task.wait(0.5)
     end
 end)
 
