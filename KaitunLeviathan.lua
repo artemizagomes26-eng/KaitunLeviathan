@@ -1243,14 +1243,16 @@ local function CheckSkill(Weapon, Key)
     return ok and result
 end
 local function Equip_Auto(Tool)
-    if _G.QE_NoAutoEquip then return end
-    local blockKey = nil
-    if Tool == "Dragonstorm" then
-        blockKey = "gun"
-    elseif Tool == "Melee" or Tool == "Sword" or Tool == "Gun" or Tool == "Blox Fruit" then
-        blockKey = "weapon"
+    local dragonOption = Tool == "Dragonstorm"
+        and (_G.DragonGunFarm or _G.DragonGunLeviathan or _G.QE_AutoGun)
+    if not dragonOption then
+        if _G.QE_NoAutoEquip then return end
+        local blockKey = nil
+        if Tool == "Melee" or Tool == "Sword" or Tool == "Gun" or Tool == "Blox Fruit" then
+            blockKey = "weapon"
+        end
+        if blockKey and qeManualUnequip[blockKey] then return end
     end
-    if blockKey and qeManualUnequip[blockKey] then return end
     if not Character or not HRP or not HD then
         return
     end
@@ -1279,6 +1281,20 @@ local function Equip_Auto(Tool)
             end
         end
     end
+end
+local function QE_ForceEquipDragon()
+    if not Character or not HD or HD.Health <= 0 then return false end
+    local held = Character:FindFirstChildOfClass("Tool")
+    if held and (held.ToolTip == "Gun" or held.Name == "Dragonstorm") then return true end
+    local backpack = LocalPlayer:FindFirstChild("Backpack")
+    if not backpack then return false end
+    for _, tool in pairs(backpack:GetChildren()) do
+        if tool:IsA("Tool") and (tool.ToolTip == "Gun" or tool.Name == "Dragonstorm") then
+            pcall(function() HD:EquipTool(tool) end)
+            return true
+        end
+    end
+    return false
 end
 local function Skill_Auto(Key)
     local Code
@@ -2646,7 +2662,7 @@ local function StartDragonAttack()
                 local tool = char:FindFirstChildOfClass("Tool")
                 if not tool or tool.Name ~= "Dragonstorm" then
                     if not IsOnBoat() then
-                        Equip_Auto("Dragonstorm")
+                        QE_ForceEquipDragon()
                     end
                     return
                 end
@@ -2704,7 +2720,7 @@ local function FightSeaEvent(Mob, Root, Skill, ShouldBreak)
         end
         if not IsOnBoat() then
             if _G.DragonGunFarm then
-                Equip_Auto("Dragonstorm")
+                QE_ForceEquipDragon()
             elseif Stand and HRP then
                 local Distance = (Stand.Position - HRP.Position).Magnitude
                 local RootNow = Sea_EventRoot(Mob)
@@ -2953,7 +2969,7 @@ local function FightLeviathan(ShouldBreak, WaitSec)
                 end
                 if _G.DragonGunLeviathan and CheckItem("Dragonstorm") then
                     initDragon()
-                    Equip_Auto("Dragonstorm")
+                    QE_ForceEquipDragon()
                     local target = getClosestSeaTarget()
                     if target then
                         fireShot(target.Position, target)
@@ -7125,6 +7141,10 @@ local function qeEquipDragonstorm()
     local isGun = function(tool)
         return tool and (tool.ToolTip == "Gun" or tool.Name == "Dragonstorm")
     end
+    local dragonOption = _G.DragonGunFarm or _G.DragonGunLeviathan or _G.QE_AutoGun
+    if dragonOption then
+        qeManualUnequip.gun = false
+    end
     if qeManualUnequip.gun then
         if isGun(equipped) then
             qeManualUnequip.gun = false
@@ -7137,7 +7157,7 @@ local function qeEquipDragonstorm()
         qeLastGunTool = nil
         return false
     end
-    if _G.QE_NoAutoEquip then
+    if _G.QE_NoAutoEquip and not dragonOption then
         if isGun(equipped) then return true end
         return false
     end
