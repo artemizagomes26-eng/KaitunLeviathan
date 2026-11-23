@@ -1233,8 +1233,17 @@ local function CheckSkill(Weapon, Key)
     return ok and result
 end
 local function Equip_Auto(Tool)
+    if _G.QE_NoAutoEquip then return end
     if not Character or not HRP or not HD then
         return
+    end
+    local held = Character:FindFirstChildOfClass("Tool")
+    if held then
+        if Tool == "Melee" or Tool == "Sword" or Tool == "Gun" or Tool == "Blox Fruit" then
+            if held.ToolTip == Tool then return end
+        elseif held.Name == Tool then
+            return
+        end
     end
     if HD.Health > 0 and LocalPlayer:FindFirstChild("Backpack") then
         if Tool == "Melee" or Tool == "Sword" or Tool == "Gun" or Tool == "Blox Fruit" then
@@ -6864,6 +6873,7 @@ if _G.QE_JumpPower == nil then _G.QE_JumpPower = 50 end
 if _G.QE_WalkOnWater == nil then _G.QE_WalkOnWater = false end
 if _G.QE_FindLeviathan == nil then _G.QE_FindLeviathan = false end
 if _G.QE_WaitSeats == nil then _G.QE_WaitSeats = true end
+if _G.QE_NoAutoEquip == nil then _G.QE_NoAutoEquip = false end
 if _G.QE_FollowTargets == nil then
     _G.QE_FollowTargets = {}
     if _G.FollowTarget and _G.FollowTarget ~= "" and _G.FollowTarget ~= "--" then
@@ -7010,10 +7020,12 @@ local function qePlayerTarget()
 end
 
 local qeChosenWeapon = nil
+local qeLastWeaponEquip = 0
 
 local function qeEquipWeapon()
     local char, _, hum = qeParts()
     if not char or not hum then return false end
+    if _G.QE_NoAutoEquip then return true end
     local order = {}
     if _G.QE_Weapon == "Melee" then
         order = { "Melee" }
@@ -7042,17 +7054,25 @@ local function qeEquipWeapon()
         end
     end
     if not found then return equipped ~= nil end
+    if equipped == found and qeChosenWeapon == found then return true end
+    if os.clock() - qeLastWeaponEquip < 1.5 and equipped then return true end
+    qeLastWeaponEquip = os.clock()
     qeChosenWeapon = found
     if equipped ~= found then pcall(function() hum:EquipTool(found) end) end
     return true
 end
 
 local qeLastGunCraft = 0
+local qeLastGunEquip = 0
 
 local function qeEquipDragonstorm()
     local char, _, hum = qeParts()
     if not char or not hum then return false end
     local equipped = char:FindFirstChildOfClass("Tool")
+    if _G.QE_NoAutoEquip then
+        if equipped and (equipped.ToolTip == "Gun" or equipped.Name == "Dragonstorm") then return true end
+        return false
+    end
     if equipped and (equipped.ToolTip == "Gun" or equipped.Name == "Dragonstorm") then return true end
     local gun = nil
     if qeLocal.Backpack then
@@ -7070,6 +7090,8 @@ local function qeEquipDragonstorm()
         end
         return false
     end
+    if os.clock() - qeLastGunEquip < 2 and equipped then return false end
+    qeLastGunEquip = os.clock()
     pcall(function() hum:EquipTool(gun) end)
     return false
 end
@@ -7387,6 +7409,11 @@ QETab:AddToggle("qe.silent", {
     Title = "Silent Aim (invisible shots)",
     Default = _G.QE_SilentAim,
     Callback = function(state) _G.QE_SilentAim = state end,
+})
+QETab:AddToggle("qe.noequip", {
+    Title = "No Auto Equip (use held item)",
+    Default = _G.QE_NoAutoEquip,
+    Callback = function(state) _G.QE_NoAutoEquip = state end,
 })
 QETab:AddSection("Hunt Team")
 local qePlayerValues = {}
