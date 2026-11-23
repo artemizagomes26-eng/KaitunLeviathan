@@ -544,6 +544,7 @@ end)(_G.RJR_LanguageCode)
 local ConfigFolder = "MangoJuiceHub"
 local ConfigUser = tostring(LocalPlayer and LocalPlayer.Name or "default"):gsub("[^%w_%-]", "_")
 local ConfigFile = ConfigFolder .. "/" .. ConfigUser .. "_leviathan_config.json"
+local ConfigTxtFile = ConfigFolder .. "/" .. ConfigUser .. "_leviathan_config.txt"
 local ConfigLegacyFile = ConfigFolder .. "/leviathan_config.json"
 local ConfigKeys = {
     "Mode",
@@ -589,6 +590,21 @@ local ConfigKeys = {
     "WebhookSendHeartGot",
     "WebhookSendLowPlayers",
     "ShowInfoUI",
+    "QE_FastAttack",
+    "QE_Weapon",
+    "QE_AutoGun",
+    "QE_AimNPC",
+    "QE_AimPlayer",
+    "QE_SilentAim",
+    "QE_NoAutoEquip",
+    "QE_AllowFastAutoEquip",
+    "QE_WalkSpeed",
+    "QE_JumpPower",
+    "QE_WalkOnWater",
+    "QE_FindLeviathan",
+    "QE_WaitSeats",
+    "QE_FollowTargets",
+    "QE_HuntEvents",
 }
 local function EnsureConfigFolder()
     if typeof(isfolder) == "function" and typeof(makefolder) == "function" then
@@ -630,6 +646,23 @@ local function SaveConfig()
             writefile(ConfigFile, encoded)
         end)
     end
+    local lines = {}
+    for _, key in ipairs(ConfigKeys) do
+        local value = _G[key]
+        if value ~= nil then
+            if type(value) == "table" then
+                local okTable, raw = pcall(function() return HttpService:JSONEncode(value) end)
+                table.insert(lines, key .. "=" .. (okTable and raw or ""))
+            elseif type(value) == "boolean" then
+                table.insert(lines, key .. "=" .. (value and "true" or "false"))
+            else
+                table.insert(lines, key .. "=" .. tostring(value))
+            end
+        end
+    end
+    pcall(function()
+        writefile(ConfigTxtFile, table.concat(lines, "\n"))
+    end)
 end
 local function ReadConfigFile(path)
     if typeof(isfile) ~= "function" or typeof(readfile) ~= "function" then
@@ -655,8 +688,43 @@ local function ReadConfigFile(path)
     end
     return true
 end
+local function ReadConfigTxt(path)
+    if typeof(isfile) ~= "function" or typeof(readfile) ~= "function" then
+        return false
+    end
+    if not isfile(path) then
+        return false
+    end
+    local ok, raw = pcall(readfile, path)
+    if not (ok and type(raw) == "string" and raw ~= "") then
+        return false
+    end
+    for line in raw:gmatch("[^\r\n]+") do
+        local key, value = line:match("^([%w_]+)=(.*)$")
+        if key and value then
+            for _, savedKey in ipairs(ConfigKeys) do
+                if savedKey == key then
+                    if value == "true" then
+                        _G[key] = true
+                    elseif value == "false" then
+                        _G[key] = false
+                    else
+                        local number = tonumber(value)
+                        _G[key] = number or value
+                    end
+                    break
+                end
+            end
+        end
+    end
+    return true
+end
 local function LoadConfig()
     if ReadConfigFile(ConfigFile) then
+        return
+    end
+    if ReadConfigTxt(ConfigTxtFile) then
+        SaveConfig()
         return
     end
     if not ReadConfigFile(ConfigLegacyFile) then
@@ -1246,7 +1314,7 @@ local function Equip_Auto(Tool)
     local dragonOption = Tool == "Dragonstorm"
         and (_G.DragonGunFarm or _G.DragonGunLeviathan or _G.QE_AutoGun)
     if not dragonOption then
-        if _G.QE_NoAutoEquip then return end
+        if _G.QE_NoAutoEquip or not _G.QE_AllowFastAutoEquip then return end
         local blockKey = nil
         if Tool == "Melee" or Tool == "Sword" or Tool == "Gun" or Tool == "Blox Fruit" then
             blockKey = "weapon"
@@ -1282,7 +1350,8 @@ local function Equip_Auto(Tool)
         end
     end
 end
-local function QE_ForceEquipDragon()
+local function QE_ForceEquipDragon(hasTarget)
+    if not hasTarget then return false end
     if not Character or not HD or HD.Health <= 0 then return false end
     local held = Character:FindFirstChildOfClass("Tool")
     if held and (held.ToolTip == "Gun" or held.Name == "Dragonstorm") then return true end
@@ -2662,7 +2731,7 @@ local function StartDragonAttack()
                 local tool = char:FindFirstChildOfClass("Tool")
                 if not tool or tool.Name ~= "Dragonstorm" then
                     if not IsOnBoat() then
-                        QE_ForceEquipDragon()
+                        QE_ForceEquipDragon(true)
                     end
                     return
                 end
@@ -2720,7 +2789,7 @@ local function FightSeaEvent(Mob, Root, Skill, ShouldBreak)
         end
         if not IsOnBoat() then
             if _G.DragonGunFarm then
-                QE_ForceEquipDragon()
+                QE_ForceEquipDragon(true)
             elseif Stand and HRP then
                 local Distance = (Stand.Position - HRP.Position).Magnitude
                 local RootNow = Sea_EventRoot(Mob)
@@ -2969,7 +3038,7 @@ local function FightLeviathan(ShouldBreak, WaitSec)
                 end
                 if _G.DragonGunLeviathan and CheckItem("Dragonstorm") then
                     initDragon()
-                    QE_ForceEquipDragon()
+                    QE_ForceEquipDragon(true)
                     local target = getClosestSeaTarget()
                     if target then
                         fireShot(target.Position, target)
@@ -6907,6 +6976,7 @@ if _G.QE_WalkOnWater == nil then _G.QE_WalkOnWater = false end
 if _G.QE_FindLeviathan == nil then _G.QE_FindLeviathan = false end
 if _G.QE_WaitSeats == nil then _G.QE_WaitSeats = true end
 if _G.QE_NoAutoEquip == nil then _G.QE_NoAutoEquip = false end
+if _G.QE_AllowFastAutoEquip == nil then _G.QE_AllowFastAutoEquip = false end
 if _G.QE_FollowTargets == nil then
     _G.QE_FollowTargets = {}
     if _G.FollowTarget and _G.FollowTarget ~= "" and _G.FollowTarget ~= "--" then
@@ -7066,7 +7136,7 @@ local function qeEquipWeapon()
         qeLastWeaponTool = nil
         qeChosenWeapon = nil
     end
-    if _G.QE_NoAutoEquip then return true end
+    if not _G.QE_AllowFastAutoEquip or _G.QE_NoAutoEquip then return true end
     local order = {}
     if _G.QE_Weapon == "Melee" then
         order = { "Melee" }
@@ -7468,7 +7538,7 @@ task.spawn(function()
                 Validator2 = remotes and remotes:FindFirstChild("Validator2")
             end
             local _, hrp, hum = qeParts()
-            if hrp and hum and hum.Health > 0 and ShootGunEvent and Validator2 and qeEquipDragonstorm() then
+            if hrp and hum and hum.Health > 0 and ShootGunEvent and Validator2 then
                 local hits = {}
                 if _G.QE_AimPlayer then
                     local p = qePlayerTarget()
@@ -7489,16 +7559,18 @@ task.spawn(function()
                     end
                 end
                 if #hits > 0 then
-                    qeAimTarget = hits[1].model
-                    qeFace(hits[1].root.Position)
-                    if #hits == 1 then
-                        for _, angle in ipairs({ 0, 10, -10 }) do
-                            qeFireDragon(hits[1].root.Position, hits[1].part, angle)
-                        end
-                    else
-                        for i, h in ipairs(hits) do
-                            if i > #qeDragonAngles then break end
-                            qeFireDragon(h.root.Position, h.part, qeDragonAngles[i])
+                    if qeEquipDragonstorm() then
+                        qeAimTarget = hits[1].model
+                        qeFace(hits[1].root.Position)
+                        if #hits == 1 then
+                            for _, angle in ipairs({ 0, 10, -10 }) do
+                                qeFireDragon(hits[1].root.Position, hits[1].part, angle)
+                            end
+                        else
+                            for i, h in ipairs(hits) do
+                                if i > #qeDragonAngles then break end
+                                qeFireDragon(h.root.Position, h.part, qeDragonAngles[i])
+                            end
                         end
                     end
                 else
@@ -7506,6 +7578,13 @@ task.spawn(function()
                 end
             end
         end
+    end
+end)
+
+task.spawn(function()
+    while true do
+        task.wait(15)
+        pcall(SaveConfig)
     end
 end)
 
