@@ -7110,8 +7110,6 @@ local function qeInstallSilentAim()
         qeHookInstalled = true
     end)
 end
-qeInstallSilentAim()
-
 local qeStatSignals = setmetatable({}, { __mode = "k" })
 
 local function qeWatchStats(hum)
@@ -7280,25 +7278,32 @@ task.spawn(function()
         task.wait(0.12)
         if _G.QE_FastAttack and qeHuntReady() then
             qeRefreshRemotes()
+            pcall(Attack_EnsureRemotes)
             local _, hrp, hum = qeParts()
             if hrp and hum and hum.Health > 0 and qeEquipWeapon() then
                 local hits = qeCollectTargets(hrp.Position, 500, _G.QE_AimPlayer)
-                if #hits > 0 then
-                    local target = hits[1]
+                local target = hits[1]
+                if target then
                     qeAimTarget = target.model
                     qeFace(target.root.Position)
-                    if qeRegisterAttack then
-                        pcall(function() qeRegisterAttack:FireServer(0.25) end)
-                    end
-                    if qeRegisterHit then
-                        local parts = {}
-                        for _, hit in ipairs(hits) do parts[#parts + 1] = { hit.model, hit.part } end
-                        pcall(function()
-                            qeRegisterHit:FireServer(target.part, parts, nil, nil, tostring(qeLocal.UserId) .. os.clock())
-                        end)
-                    end
                 else
                     qeAimTarget = nil
+                end
+                if _G.QE_Weapon == "Fruit" then
+                    if target then
+                        if qeRegisterAttack then
+                            pcall(function() qeRegisterAttack:FireServer(0.25) end)
+                        end
+                        if qeRegisterHit then
+                            local parts = {}
+                            for _, hit in ipairs(hits) do parts[#parts + 1] = { hit.model, hit.part } end
+                            pcall(function()
+                                qeRegisterHit:FireServer(target.part, parts, nil, nil, tostring(qeLocal.UserId) .. os.clock())
+                            end)
+                        end
+                    end
+                else
+                    pcall(Attack_Auto)
                 end
             end
         end
@@ -7310,22 +7315,37 @@ task.spawn(function()
         task.wait(0.2)
         if _G.QE_AutoGun and qeHuntReady() then
             qeRefreshRemotes()
+            pcall(initDragon)
+            if not ShootGunEvent then
+                local modules = RS:FindFirstChild("Modules")
+                local net = modules and modules:FindFirstChild("Net")
+                ShootGunEvent = (net and net:FindFirstChild("RE/ShootGunEvent")) or qeShootGun
+            end
+            if not Validator2 then
+                local remotes = RS:FindFirstChild("Remotes")
+                Validator2 = remotes and remotes:FindFirstChild("Validator2")
+            end
             local _, hrp, hum = qeParts()
-            if hrp and hum and hum.Health > 0 and qeEquipDragonstorm() then
+            if hrp and hum and hum.Health > 0 and ShootGunEvent and Validator2 and qeEquipDragonstorm() then
                 local target = nil
                 if _G.QE_AimPlayer then target = qePlayerTarget() end
                 if not target and _G.QE_AimNPC then
-                    local hits = qeCollectTargets(hrp.Position, 900, false)
-                    target = hits[1]
+                    local lvModel, lvPart = SeaAPI.Leviathan_Find()
+                    if lvModel then
+                        local root = lvPart or qeModelRoot(lvModel)
+                        if root then
+                            target = { model = lvModel, part = lvPart or root, root = root }
+                        end
+                    end
+                    if not target then
+                        local hits = qeCollectTargets(hrp.Position, 900, false)
+                        target = hits[1]
+                    end
                 end
                 if target then
                     qeAimTarget = target.model
                     qeFace(target.root.Position)
-                    if qeShootGun then
-                        pcall(function()
-                            qeShootGun:FireServer(target.root.Position, { target.part }, false, false, false, 0)
-                        end)
-                    end
+                    pcall(function() fireShot(target.root.Position, target.part) end)
                 else
                     qeAimTarget = nil
                 end
