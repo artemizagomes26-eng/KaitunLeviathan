@@ -58,6 +58,15 @@ local Defaults = {
     FPSBoost = false,
     AttackRange = 500,
     BoatSpeed = 220,
+    WalkSpeed = 50,
+    JumpPower = 50,
+    AttackMobs = true,
+    AttackPlayers = true,
+    AttackSeaBeasts = true,
+    AttackBoats = true,
+    AutoCraftScrolls = false,
+    SelectScrollType = "Mythical Scroll",
+    ScrollCraftAmount = 1,
     ShowStatus = true,
     WebhookEnabled = false,
     WebhookURL = "",
@@ -115,6 +124,10 @@ loadConfig()
 G.BoatSpeed = math.clamp(tonumber(G.BoatSpeed) or 220, 50, 400)
 G.AttackRange = math.clamp(tonumber(G.AttackRange) or 500, 100, 1500)
 G.WaterLevel = math.clamp(tonumber(G.WaterLevel) or 2, -100, 500)
+G.WalkSpeed = math.clamp(tonumber(G.WalkSpeed) or 50, 50, 200)
+G.JumpPower = math.clamp(tonumber(G.JumpPower) or 50, 50, 90)
+G.FastAttackDelay = math.clamp(tonumber(G.FastAttackDelay) or 0.3, 0, 1)
+G.ScrollCraftAmount = math.clamp(math.floor(tonumber(G.ScrollCraftAmount) or 1), 1, 10)
 
 local StatusText = "Ready"
 local StatusListeners = {}
@@ -156,6 +169,77 @@ local function getParts()
     return char, char:FindFirstChild("HumanoidRootPart"), char:FindFirstChildOfClass("Humanoid")
 end
 
+local function applyPlayerStats()
+    local _, _, hum = getParts()
+    if not hum or hum.SeatPart then return end
+    pcall(function()
+        if hum.WalkSpeed ~= G.WalkSpeed then hum.WalkSpeed = G.WalkSpeed end
+        if hum.JumpPower ~= G.JumpPower then hum.JumpPower = G.JumpPower end
+    end)
+end
+
+local function applyBoatSpeed()
+    local _, _, hum = getParts()
+    if hum and hum.SeatPart and hum.SeatPart:IsA("VehicleSeat") then
+        pcall(function()
+            hum.SeatPart.MaxSpeed = G.BoatSpeed
+            hum.SeatPart.Torque = 0.2
+            hum.SeatPart.TurnSpeed = 5
+        end)
+    end
+    local boats = workspace:FindFirstChild("Boats")
+    if boats then
+        for _, boat in ipairs(boats:GetChildren()) do
+            local seat = boat:FindFirstChildWhichIsA("VehicleSeat", true)
+            if seat then
+                pcall(function()
+                    seat.MaxSpeed = G.BoatSpeed
+                    seat.Torque = 0.2
+                    seat.TurnSpeed = 5
+                end)
+            end
+        end
+    end
+end
+
+task.spawn(function()
+    while true do
+        pcall(applyPlayerStats)
+        pcall(applyBoatSpeed)
+        task.wait(0.35)
+    end
+end)
+
+local ScrollRemoteKeys = {
+    ["Common Scroll"] = "CommonScroll",
+    ["Rare Scroll"] = "RareScroll",
+    ["Legendary Scroll"] = "LegendaryScroll",
+    ["Mythical Scroll"] = "MythicalScroll",
+}
+local CraftRemote = nil
+local lastCraftAt = 0
+
+task.spawn(function()
+    while true do
+        task.wait(1)
+        if G.AutoCraftScrolls and os.clock() - lastCraftAt >= 5 then
+            if not CraftRemote then
+                refreshRemotes()
+                if NetApi and type(NetApi.RemoteFunction) == "function" then
+                    pcall(function() CraftRemote = NetApi:RemoteFunction("Craft") end)
+                end
+                CraftRemote = CraftRemote or (Net and Net:FindFirstChild("RF/Craft"))
+            end
+            if CraftRemote then
+                lastCraftAt = os.clock()
+                local scrollKey = ScrollRemoteKeys[G.SelectScrollType] or "MythicalScroll"
+                local amount = math.clamp(math.floor(tonumber(G.ScrollCraftAmount) or 1), 1, 10)
+                pcall(function() CraftRemote:InvokeServer(scrollKey, amount) end)
+            end
+        end
+    end
+end)
+
 local NoclipOn = false
 local LastNoclip = 0
 
@@ -181,6 +265,7 @@ local HoldCFrame = nil
 local LiveHold = nil
 local AttackTarget = nil
 local AttackStand = nil
+local CombatTarget = nil
 
 local function getTweenPart()
     local part = workspace:FindFirstChild(TWEEN_PART)
@@ -378,9 +463,10 @@ RunService.Heartbeat:Connect(function(dt)
     else
         hrp.CFrame = hrp.CFrame:Lerp(goal, math.min(dist, 280 * (dt or 1 / 60)) / dist)
     end
-    if AttackTarget and AttackTarget.Parent then
-        local targetRoot = AttackTarget:FindFirstChild("HumanoidRootPart") or AttackTarget.PrimaryPart
-            or AttackTarget:FindFirstChild("Head") or AttackTarget:FindFirstChildWhichIsA("BasePart", true)
+    local faceModel = (AttackTarget and AttackTarget.Parent and AttackTarget) or (CombatTarget and CombatTarget.Parent and CombatTarget)
+    if faceModel then
+        local targetRoot = faceModel:FindFirstChild("HumanoidRootPart") or faceModel.PrimaryPart
+            or faceModel:FindFirstChild("Head") or faceModel:FindFirstChildWhichIsA("BasePart", true)
         if targetRoot then
             local flat = Vector3.new(targetRoot.Position.X - hrp.Position.X, 0, targetRoot.Position.Z - hrp.Position.Z)
             if flat.Magnitude > 0.5 then
@@ -546,34 +632,68 @@ local function buildHitList(origin, range)
     local list = HitCache or {}
     table.clear(list)
     range = range or G.AttackRange
-    local folders = { workspace:FindFirstChild("Enemies"), workspace:FindFirstChild("SeaBeasts"), workspace:FindFirstChild("Characters") }
-    for _, folder in ipairs(folders) do
-        if folder then
-            for _, model in ipairs(folder:GetChildren()) do
-                if model ~= LocalPlayer.Character and isAlive(model) then
-                    local root = modelRoot(model)
-                    local hum = model:FindFirstChildOfClass("Humanoid")
-                    if root then
-                        local dist = (origin - root.Position).Magnitude
-                        if dist <= range then
-                            local part = model:FindFirstChild("Head") or root
-                            if part and part:IsA("BasePart") then
-                                list[#list + 1] = { model = model, part = part, root = root, distance = dist }
-                            end
-                        end
-                    elseif hum and hum.Health > 0 then
-                        local head = model:FindFirstChild("Head")
-                        if head then
-                            local dist = (origin - head.Position).Magnitude
-                            if dist <= range then
-                                list[#list + 1] = { model = model, part = head, root = head, distance = dist }
-                            end
-                        end
-                    end
-                end
+    local seen = {}
+
+    local function addModel(model, kind)
+        if not model or seen[model] or model == LocalPlayer.Character or not isAlive(model) then return end
+        local owner = model:FindFirstChild("Owner")
+        if owner and owner.Value then
+            local value = owner.Value
+            local name = typeof(value) == "Instance" and value.Name or tostring(value)
+            if value == LocalPlayer or value == LocalPlayer.Character or name == LocalPlayer.Name then return end
+        end
+        local root = modelRoot(model)
+        if not root then return end
+        local dist = (origin - root.Position).Magnitude
+        if dist > range then return end
+        local part = model:FindFirstChild("Head")
+        if not part or not part:IsA("BasePart") then
+            part = model:FindFirstChildOfClass("MeshPart") or root
+        end
+        if not part or not part:IsA("BasePart") then return end
+        seen[model] = true
+        list[#list + 1] = { model = model, part = part, root = root, distance = dist, kind = kind }
+    end
+
+    local enemies = workspace:FindFirstChild("Enemies")
+    if enemies then
+        for _, model in ipairs(enemies:GetChildren()) do
+            local isBoat = model:GetAttribute("IsBoat") == true
+            if isBoat then
+                if G.AttackBoats then addModel(model, "Boat") end
+            elseif G.AttackMobs then
+                addModel(model, "Mob")
             end
         end
     end
+
+    if G.AttackPlayers then
+        local characters = workspace:FindFirstChild("Characters")
+        if characters then
+            for _, model in ipairs(characters:GetChildren()) do
+                addModel(model, "Player")
+            end
+        end
+    end
+
+    if G.AttackSeaBeasts then
+        local seaBeasts = workspace:FindFirstChild("SeaBeasts")
+        if seaBeasts then
+            for _, model in ipairs(seaBeasts:GetChildren()) do
+                addModel(model, "SeaBeast")
+            end
+        end
+    end
+
+    if G.AttackBoats then
+        local boats = workspace:FindFirstChild("Boats")
+        if boats then
+            for _, model in ipairs(boats:GetChildren()) do
+                addModel(model, "Boat")
+            end
+        end
+    end
+
     table.sort(list, function(a, b) return a.distance < b.distance end)
     HitCache, HitOrigin, HitAt = list, origin, now
     return list
@@ -600,8 +720,9 @@ local function fastAttack()
         if not tool then return end
     end
     local hits = buildHitList(hrp.Position, G.AttackRange)
-    if #hits == 0 then return end
+    if #hits == 0 then CombatTarget = nil return end
     local target = hits[1]
+    CombatTarget = target.model
     facePosition(target.root.Position)
     if RegisterAttack then
         pcall(function() RegisterAttack:FireServer(G.FastAttackDelay or 0.3) end)
@@ -690,15 +811,27 @@ local function autoShootGun()
         return
     end
     local hits = buildHitList(hrp.Position, 900)
-    if #hits == 0 then return end
+    if #hits == 0 then CombatTarget = nil return end
     local target = hits[1]
+    CombatTarget = target.model
     facePosition(target.root.Position)
     initDragonRuntime()
     if not fireDragonValidator() then return end
     if ShootGunEvent then
-        local count = G.DragonstormMode == "Single Damage" and 1 or 3
-        for _ = 1, count do
-            pcall(function() ShootGunEvent:FireServer(target.root.Position, { target.part }) end)
+        if G.DragonstormMode == "Single Damage" then
+            for _ = 1, 3 do
+                pcall(function()
+                    ShootGunEvent:FireServer(target.root.Position, { target.part }, false, false, false, 0)
+                end)
+            end
+        else
+            local angles = { 0, 10, -10, 20, -20, 30, -30, 40 }
+            for index, hit in ipairs(hits) do
+                if index > #angles then break end
+                pcall(function()
+                    ShootGunEvent:FireServer(hit.root.Position, { hit.part }, false, false, false, angles[index])
+                end)
+            end
         end
     end
     autoHaki()
@@ -1034,6 +1167,9 @@ end
 local function startLoops()
     if not G.FullyLeviathan or Respawning then return end
     applyShiftLock()
+    applyPlayerStats()
+    local _, _, startHum = getParts()
+    if startHum then pcall(function() startHum.AutoRotate = false end) end
     LoopGeneration = LoopGeneration + 1
     local generation = LoopGeneration
     task.spawn(function() mainLeviathanLoop(generation) end)
@@ -1062,7 +1198,7 @@ local function stopLoops()
     LoopGeneration = LoopGeneration + 1
     stopTween()
     noClip(false)
-    AttackTarget, AttackStand = nil, nil
+    AttackTarget, AttackStand, CombatTarget = nil, nil, nil
     local _, _, hum = getParts()
     if hum then pcall(function() hum.AutoRotate = true end) end
     restoreMouseBehavior()
@@ -1072,7 +1208,7 @@ local function onDeath()
     Respawning = true
     stopTween()
     clearHover()
-    AttackTarget, AttackStand = nil, nil
+    AttackTarget, AttackStand, CombatTarget = nil, nil, nil
     restoreMouseBehavior()
     setStatus("Respawning - toggle stays enabled")
 end
@@ -1085,6 +1221,7 @@ local function bindCharacter(char)
         pcall(function() Humanoid.Died:Connect(onDeath) end)
     end
     Respawning = false
+    applyPlayerStats()
     if G.FullyLeviathan then
         task.defer(startLoops)
     end
@@ -1202,13 +1339,14 @@ local function buildUI()
     SendNotify = function(title, content)
         pcall(function() Fluent:Notify({ Title = title or "Quantum Kaitun", Content = content or "", Duration = 4 }) end)
     end
+    pcall(function() Fluent:SetTheme("Purple") end)
     Window = Fluent:CreateWindow({
-        Title = "Quantum Kaitun | Leviathan",
-        SubTitle = "English version",
-        TabWidth = 160,
-        Size = UDim2.fromOffset(520, 400),
+        Title = "Quantum Onyx",
+        SubTitle = "Blox Fruit | Kaitun v.Premium",
+        TabWidth = 165,
+        Size = UDim2.fromOffset(540, 420),
         Acrylic = true,
-        Theme = "Dark",
+        Theme = "Purple",
         MinimizeKey = Enum.KeyCode[G.MenuKeybind or "G"],
     })
 
@@ -1224,7 +1362,7 @@ local function buildUI()
         })
     end
 
-    local function slider(tab, id, title, key, min, max)
+    local function slider(tab, id, title, key, min, max, callback)
         tab:AddSlider(id, {
             Title = title,
             Default = G[key],
@@ -1234,6 +1372,7 @@ local function buildUI()
             Callback = function(value)
                 G[key] = value
                 saveConfig()
+                if callback then callback(value) end
             end,
         })
     end
@@ -1249,10 +1388,26 @@ local function buildUI()
         })
     end
 
-    local Main = Window:AddTab({ Title = "Main", Icon = "anchor" })
-    local Hunt = Window:AddTab({ Title = "Leviathan Hunt", Icon = "compass" })
+    local function dropdown(tab, id, title, key, values, callback)
+        tab:AddDropdown(id, {
+            Title = title,
+            Values = values,
+            Default = G[key],
+            Multi = false,
+            Callback = function(value)
+                G[key] = value
+                saveConfig()
+                if callback then callback(value) end
+            end,
+        })
+    end
+
+    local Main = Window:AddTab({ Title = "Home", Icon = "home" })
+    local Hunt = Window:AddTab({ Title = "Sea Event", Icon = "ship" })
+    local Player = Window:AddTab({ Title = "Player", Icon = "user" })
     local Combat = Window:AddTab({ Title = "Combat", Icon = "swords" })
-    local Boat = Window:AddTab({ Title = "Boat", Icon = "ship" })
+    local Boat = Window:AddTab({ Title = "Boat", Icon = "anchor" })
+    local Scrolls = Window:AddTab({ Title = "Scroll Crafting & Trade", Icon = "scroll" })
     local Web = Window:AddTab({ Title = "Webhook", Icon = "link" })
 
     toggle(Main, "main.enabled", "Fully Leviathan", "FullyLeviathan", function(state)
@@ -1265,10 +1420,6 @@ local function buildUI()
         end
     end)
     toggle(Main, "main.status", "Show status overlay", "ShowStatus")
-    toggle(Main, "main.icon", "Show floating icon", "ShowIcon")
-    toggle(Main, "main.shiftlock", "Force ShiftLock (aim fix)", "ForceShiftLock", function(state)
-        if state then applyShiftLock() else restoreMouseBehavior() end
-    end)
     toggle(Main, "main.fog", "Remove Fog", "RemoveFog")
     toggle(Main, "main.fps", "FPS Boost", "FPSBoost")
     Main:AddButton({
@@ -1313,19 +1464,26 @@ local function buildUI()
         end,
     })
 
+    slider(Player, "player.walkspeed", "Walk Speed (max 200)", "WalkSpeed", 50, 200, function()
+        applyPlayerStats()
+    end)
+    slider(Player, "player.jumppower", "Jump Power (max 90)", "JumpPower", 50, 90, function()
+        applyPlayerStats()
+    end)
+    toggle(Player, "player.icon", "Show floating icon", "ShowIcon")
+    toggle(Player, "player.shiftlock", "Force ShiftLock (aim fix)", "ForceShiftLock", function(state)
+        if state then applyShiftLock() else restoreMouseBehavior() end
+    end)
+    input(Player, "player.keybind", "Menu Keybind", "MenuKeybind")
+
     toggle(Combat, "combat.fast", "Fast Attack", "FastAttack")
     slider(Combat, "combat.delay", "Fast Attack Delay", "FastAttackDelay", 0, 1)
     toggle(Combat, "combat.gun", "Auto Shoot Gun (Dragonstorm)", "AutoShootGun")
-    Combat:AddDropdown("combat.mode", {
-        Title = "Dragonstorm Mode",
-        Values = { "Spread Damage", "Single Damage" },
-        Default = G.DragonstormMode,
-        Multi = false,
-        Callback = function(value)
-            G.DragonstormMode = value
-            saveConfig()
-        end,
-    })
+    dropdown(Combat, "combat.mode", "Dragonstorm Mode", "DragonstormMode", { "Spread Damage", "Single Damage" })
+    toggle(Combat, "combat.mobs", "Attack NPCs", "AttackMobs")
+    toggle(Combat, "combat.players", "Attack Players", "AttackPlayers")
+    toggle(Combat, "combat.seabeasts", "Attack Sea Beasts", "AttackSeaBeasts")
+    toggle(Combat, "combat.boats", "Attack Boats", "AttackBoats")
     toggle(Combat, "combat.haki", "Auto Haki", "AutoHaki")
     toggle(Combat, "combat.ken", "Auto Ken", "AutoKen")
     toggle(Combat, "combat.v3", "Auto Race V3", "AutoV3")
@@ -1333,9 +1491,17 @@ local function buildUI()
     toggle(Combat, "combat.skills", "Auto Skills", "AutoSkills")
     slider(Combat, "combat.range", "Attack Range", "AttackRange", 100, 1500)
 
-    slider(Boat, "boat.speed", "Boat Speed (max 400)", "BoatSpeed", 50, 400)
+    slider(Boat, "boat.speed", "Boat Speed (max 400)", "BoatSpeed", 50, 400, function()
+        applyBoatSpeed()
+    end)
     toggle(Boat, "boat.water", "Walk on Water", "WalkOnWater")
     slider(Boat, "boat.waterlevel", "Water Level", "WaterLevel", -100, 500)
+
+    toggle(Scrolls, "scroll.auto", "Auto Craft Scrolls", "AutoCraftScrolls")
+    dropdown(Scrolls, "scroll.type", "Select Scroll", "SelectScrollType", {
+        "Common Scroll", "Rare Scroll", "Legendary Scroll", "Mythical Scroll",
+    })
+    slider(Scrolls, "scroll.amount", "Craft Amount", "ScrollCraftAmount", 1, 10)
 
     toggle(Web, "web.enabled", "Webhook Enabled", "WebhookEnabled")
     input(Web, "web.url", "Webhook URL", "WebhookURL")
